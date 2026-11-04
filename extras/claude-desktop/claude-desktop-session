@@ -1,0 +1,13 @@
+#!/bin/sh
+# 在 Ubuntu PRoot 里（用户 claude）启动 Claude：先开 gnome-keyring，让 Claude 能把登录凭据存进钥匙串，
+# 否则 safeStorage 不可用，每次都要重新登录。
+# 用无密码的 login 钥匙串：空密码解锁会弹确认框（gcr-prompter），无人值守时会失败。
+# 凭据不加密，但只在 Termux 私有目录里，和不装钥匙串时一样。
+K="$HOME/.local/share/keyrings"
+mkdir -p "$K"; chmod 700 "$K"
+[ -f "$K/login.keyring" ] || printf '[keyring]\ndisplay-name=login\nctime=0\nmtime=0\nlock-on-idle=false\nlock-after=false\n' > "$K/login.keyring"
+[ -f "$K/default" ] || printf login > "$K/default"
+chmod 600 "$K/login.keyring" "$K/default"
+gnome-keyring-daemon --start --components=secrets >/dev/null 2>&1 || true
+exec claude-desktop --no-sandbox --disable-dev-shm-usage --disable-gpu --in-process-gpu --no-zygote \
+    --password-store=gnome-libsecret "$@"

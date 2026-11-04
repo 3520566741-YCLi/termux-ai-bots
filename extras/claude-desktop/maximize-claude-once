@@ -1,0 +1,16 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# 等 Claude 窗口出现后最大化一次（手机屏幕小）
+set -eu
+export DISPLAY=${DISPLAY:-:1}
+exec proot-distro login @DISTRO@ --shared-tmp -- env DISPLAY="$DISPLAY" bash -c '
+for attempt in $(seq 1 90); do
+    window_id=$(/usr/bin/wmctrl -lx | awk '\''tolower($3) ~ /claude/ {print $1; exit}'\'')
+    if test -n "$window_id"; then
+        /usr/bin/wmctrl -ir "$window_id" -b add,maximized_vert,maximized_horz
+        exit 0
+    fi
+    sleep 0.5
+done
+echo "Claude did not create a window within 45 seconds" >&2
+exit 1
+'

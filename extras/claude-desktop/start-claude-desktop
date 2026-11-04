@@ -1,0 +1,11 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# 在 proot-distro 的 Ubuntu 里以普通用户 claude 启动官方 Claude 桌面版（Linux beta, arm64），适配 Termux:X11。
+# 以 root 运行时 Electron 渲染进程拿不到 --no-sandbox 会直接退出（白屏），
+# 而 Claude 又拒绝 --browser-subprocess-path 等调试参数，所以用普通用户。
+# 启动参数和钥匙串在 PRoot 里的 /usr/local/bin/claude-desktop-session。
+# 可选：设置 PULSE_SERVER（例如 tcp:127.0.0.1:4713）让 PRoot 里有声音。
+set -eu
+export DISPLAY=${DISPLAY:-:1}
+mkdir -p "$HOME/.cache"
+setsid -f "$HOME/.local/bin/maximize-claude-once" >> "$HOME/.cache/claude-window.log" 2>&1
+exec proot-distro login @DISTRO@ --user claude --shared-tmp -- env DISPLAY="$DISPLAY" XDG_RUNTIME_DIR=/tmp/claude-runtime-u ${PULSE_SERVER:+PULSE_SERVER=$PULSE_SERVER} bash -lc 'mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"; exec dbus-run-session -- claude-desktop-session' >> "$HOME/.cache/claude-desktop.log" 2>&1

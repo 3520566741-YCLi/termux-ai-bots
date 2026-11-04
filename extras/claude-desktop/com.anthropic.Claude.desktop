@@ -1,0 +1,11 @@
+[Desktop Entry]
+# 覆盖系统自带的同名文件：浏览器登录完成后用 claude:// 链接回到 Claude，
+# 第二个进程也要带手机上必需的参数，才能把链接交给已打开的 Claude 窗口。
+Name=Claude
+Comment=Desktop application for Claude.ai
+Exec=claude-desktop-session %U
+Icon=claude-desktop
+Type=Application
+NoDisplay=true
+StartupWMClass=com.anthropic.Claude
+MimeType=x-scheme-handler/claude;application/vnd.anthropic.mcpb;application/vnd.anthropic.skill;

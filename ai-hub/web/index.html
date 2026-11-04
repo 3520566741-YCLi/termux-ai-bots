@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#050807">
+<title>AI 中枢</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="scan" aria-hidden="true"></div>
+<header class="top">
+  <div class="brand">
+    <span class="prompt">&gt;</span>
+    <div>
+      <h1>AI 中枢</h1>
+      <p class="sub">MATE//30 · Telegram 机器人控制台</p>
+    </div>
+  </div>
+  <button id="refresh" class="icon-btn" aria-label="刷新">
+    <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+  </button>
+</header>
+
+<section class="stats" aria-label="概览">
+  <div class="stat"><span id="s-running" class="num">–</span><span class="lbl">运行中</span></div>
+  <div class="stat"><span id="s-total" class="num">–</span><span class="lbl">已登记</span></div>
+  <div class="stat"><span id="s-replies" class="num">–</span><span class="lbl">今日回复</span></div>
+  <div class="stat"><span id="s-x11" class="num small">–</span><span class="lbl">Linux 桌面</span></div>
+</section>
+
+<div id="storage-banner" class="banner" hidden></div>
+
+<section class="net" id="net" aria-label="网络">
+  <span class="chip muted">网络检测中…</span>
+</section>
+
+<main id="bots" class="bots" aria-live="polite">
+  <div class="empty">正在连接控制台…</div>
+</main>
+
+<section class="storage" id="storage" hidden aria-label="手机文件">
+  <div class="st-head">
+    <h2>手机文件</h2>
+    <span id="st-used" class="st-used">–</span>
+  </div>
+  <div class="bar" aria-hidden="true"><div class="fill" id="st-fill"></div><div class="mark" id="st-mark"></div></div>
+  <p id="st-alert" class="st-alert" hidden></p>
+  <div class="st-tools">
+    <label class="check"><input type="checkbox" id="st-all"> 全选</label>
+    <span id="st-count" class="st-count">未选择</span>
+    <button id="st-del" class="btn danger" disabled>删除所选</button>
+  </div>
+  <ul id="st-list" class="files"><li class="muted">加载中…</li></ul>
+</section>
+
+<details class="howto">
+  <summary>接入新的 AI</summary>
+  <ol>
+    <li>把新机器人放进 Termux 自己的目录（例如 <code>~/ai-claude</code>），提供 <code>start.sh</code>、<code>stop.sh</code>，并把主进程 PID 写入 <code>logs/bot.pid</code>。</li>
+    <li>在 <code>~/.config/ai-hub/bots.json</code> 的 <code>bots</code> 数组里加一项（id、名称、目录、说明）。</li>
+    <li>默认开启自动重启（被系统杀掉会在 2 分钟内拉起；你点“停止”的不会拉起）；不需要可设 <code>"autorestart": false</code>。</li>
+    <li>回到这里下拉刷新，新卡片就会出现。详细字段见 <code>~/.local/share/ai-hub/ADDING_AI.md</code>。</li>
+  </ol>
+</details>
+
+<footer class="foot">
+  <span id="clock">--:--:--</span>
+  <span>仅本机可访问 · 20 分钟无操作自动休眠</span>
+</footer>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<dialog id="confirm" class="confirm">
+  <form method="dialog">
+    <p id="confirm-text"></p>
+    <div class="row">
+      <button value="cancel" class="btn ghost">取消</button>
+      <button value="ok" class="btn danger" id="confirm-ok">确定</button>
+    </div>
+  </form>
+</dialog>
+
+<template id="card">
+  <article class="card">
+    <div class="card-head">
+      <div class="dot" aria-hidden="true"></div>
+      <div class="title">
+        <h2></h2>
+        <p class="desc"></p>
+      </div>
+      <span class="pill"></span>
+    </div>
+    <dl class="meta">
+      <div><dt>运行时长</dt><dd class="uptime">–</dd></div>
+      <div><dt>今日提问 / 回复</dt><dd class="today">–</dd></div>
+      <div><dt>今日 token（入/出）</dt><dd class="tokens">–</dd></div>
+      <div><dt>今日估算花费</dt><dd class="cost">–</dd></div>
+      <div class="wide"><dt>自动守护</dt><dd class="guard">–</dd></div>
+      <div class="wide"><dt>最近事件</dt><dd class="last">–</dd></div>
+    </dl>
+    <div class="actions">
+      <button class="btn primary" data-act="start">启动</button>
+      <button class="btn" data-act="restart">重启</button>
+      <button class="btn danger" data-act="stop">停止</button>
+    </div>
+    <div class="extras"></div>
+    <details class="log">
+      <summary>最近日志</summary>
+      <ol class="events"></ol>
+    </details>
+  </article>
+</template>
+
+<script src="app.js"></script>
+</body>
+</html>

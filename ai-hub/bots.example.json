@@ -1,0 +1,50 @@
+{
+  "bots": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek 助手",
+      "dir": "~/ai-council",
+      "description": "deepseek-flash · 能看图、Tavily 联网、读 GitHub、写 Notion · 记 10 轮",
+      "channel": "Telegram 私聊/群",
+      "accent": "#4d6bfe",
+      "pricing": {
+        "currency": "元",
+        "peak": {"hit": 0.04, "miss": 2, "out": 8},
+        "offpeak": {"hit": 0.02, "miss": 1, "out": 4},
+        "peak_weekdays": [0, 1, 2, 3, 4],
+        "peak_hours": [[9, 12], [14, 18]]
+      }
+    },
+    {
+      "id": "codex",
+      "name": "Codex 助手",
+      "dir": "~/ai-codex",
+      "description": "ChatGPT 订阅 · 问答/看图/写代码/存文件 · 仅主人 owner only",
+      "channel": "Telegram 私聊/群",
+      "accent": "#10a37f",
+      "actions": [
+        {"label": "开放 Codex 绑定（30 分钟）", "command": ["bash", "scripts/codex_bind_window.sh"]}
+      ]
+    },
+    {
+      "id": "claude",
+      "name": "Claude 助手",
+      "dir": "~/ai-claude",
+      "description": "Claude Sonnet · 官方 API 按量计费 · 能看图、能联网搜索 · 记 10 轮",
+      "channel": "Telegram 私聊/群",
+      "accent": "#d97757",
+      "pricing": {
+        "currency": "$",
+        "peak": {"hit": 0.2, "miss": 2, "out": 10},
+        "offpeak": {"hit": 0.2, "miss": 2, "out": 10},
+        "peak_weekdays": [],
+        "search": 0.01
+      }
+    }
+  ],
+  "network_checks": [
+    {"name": "Telegram", "url": "https://api.telegram.org"},
+    {"name": "DeepSeek", "url": "https://api.deepseek.com"},
+    {"name": "Anthropic", "url": "https://api.anthropic.com"}
+  ]
+}

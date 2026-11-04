@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+logs/
+memory_store/
+codex_owner.json
+codex_bind_window
+codex_code.json
+*.mo
+*.so
