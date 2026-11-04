@@ -10,7 +10,7 @@ Ground rules for secrets (bot tokens, API keys):
 - Never paste a secret into Telegram, into an AI chat, into a shell command line, or into a file that is committed to Git.
 - If a secret leaks anyway, revoke it at the provider and create a new one.
 
-Placeholders used below: `example_deepseek_bot`, `example_claude_bot`, `example_codex_bot` (your bots' usernames), `-1001234567890` (your group's chat ID), `<repo-url>` (the URL of this repository).
+Placeholders used below: `example_deepseek_bot`, `example_claude_bot`, `example_codex_bot` (your bots' usernames), `-1001234567890` (your group's chat ID).
 
 ---
 
@@ -52,7 +52,7 @@ pkg install -y python git proot termux-api openssh rsync
 ## 4. Get the code and create the Python environment
 
 ```bash
-git clone <repo-url> ~/ai-bots-src
+git clone https://github.com/3520566741-YCLi/termux-ai-bots.git ~/ai-bots-src
 cp -r ~/ai-bots-src/ai-council ~/ai-council
 chmod 700 ~/ai-council
 cd ~/ai-council

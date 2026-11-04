@@ -10,7 +10,7 @@
 - 不要把密钥粘贴到 Telegram、AI 对话框、命令行参数里，也不要写进会提交到 Git 的文件。
 - 万一泄露，到对应平台作废并重新生成。
 
-下文的占位符：`example_deepseek_bot`、`example_claude_bot`、`example_codex_bot`（你的机器人用户名），`-1001234567890`（你的群 chat ID），`<repo-url>`（本仓库地址）。
+下文的占位符：`example_deepseek_bot`、`example_claude_bot`、`example_codex_bot`（你的机器人用户名），`-1001234567890`（你的群 chat ID）。
 
 ---
 
@@ -52,7 +52,7 @@ Codex 需要 `proot`（见第 9 步）。`openssh` 只有 `/code` 和存文件�
 ## 4. 获取代码，建 Python 环境
 
 ```bash
-git clone <repo-url> ~/ai-bots-src
+git clone https://github.com/3520566741-YCLi/termux-ai-bots.git ~/ai-bots-src
 cp -r ~/ai-bots-src/ai-council ~/ai-council
 chmod 700 ~/ai-council
 cd ~/ai-council
