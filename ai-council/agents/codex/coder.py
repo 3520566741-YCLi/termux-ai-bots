@@ -81,7 +81,21 @@ def load_code_config() -> Optional[dict]:
     if not all(isinstance(data.get(k), str) and data[k] for k in ('repo', 'web', 'dir')):
         return None
     data['dir'] = os.path.expanduser(data['dir'])
-    return data
+    return with_defaults(data)
+
+
+def with_defaults(cfg: dict) -> dict:
+    """读写分开：repo 只用来读（克隆代码），push_repo 放 codex/ 分支，files_repo 放 files 分支。
+
+    推荐把手机能写的东西放到单独的仓库（push_repo / files_repo），主仓库的部署密钥只给只读，
+    这样即使手机上的密钥被盗，也改不了主仓库的 main。没写的项默认和 repo 相同（旧配置照常可用）。
+    """
+    cfg = dict(cfg)
+    cfg.setdefault('push_repo', cfg['repo'])
+    cfg.setdefault('push_web', cfg['web'])
+    cfg.setdefault('files_repo', cfg['push_repo'])
+    cfg.setdefault('files_web', cfg['push_web'])
+    return cfg
 
 
 class CodexCoder:
@@ -140,17 +154,18 @@ class CodexCoder:
         Path(work).parent.mkdir(parents=True, exist_ok=True)
         await self.clone(cfg, work)
         await self.git('checkout', '--quiet', '-B', branch, 'origin/main', cwd=work)
-        await self.stage_files(work)
+        await self.stage_files(work, cfg)
         return work
 
-    async def stage_files(self, work: str) -> None:
+    async def stage_files(self, work: str, cfg: Optional[dict] = None) -> None:
         """把 files 分支（主人发来的文件）放到 _files/，不提交进代码分支（Codex 运行前，工作区还是干净的克隆）。"""
         exclude = Path(work) / '.git/info/exclude'
         exclude.parent.mkdir(parents=True, exist_ok=True)
         if '_files/' not in (exclude.read_text() if exclude.exists() else ''):
             with exclude.open('a') as f:
                 f.write('\n_files/\n')
-        rc, _ = await self.sh('git', *GIT_SAFE, 'fetch', '--quiet', 'origin', 'files', cwd=work, timeout=300)
+        source = (cfg or {}).get('files_repo', 'origin')
+        rc, _ = await self.sh('git', *GIT_SAFE, 'fetch', '--quiet', source, 'files', cwd=work, timeout=300)
         if rc != 0:
             return   # 还没有 files 分支
         files = Path(work) / '_files'
@@ -182,7 +197,7 @@ class CodexCoder:
             if rc != 0:
                 raise CoderError('提交失败')
             # 只推本任务的 codex/ 分支，显式写出目标，绝不推 main。
-            rc, _ = await self.sh('git', *GIT_SAFE, 'push', '--quiet', '--no-verify', 'origin',
+            rc, _ = await self.sh('git', *GIT_SAFE, 'push', '--quiet', '--no-verify', cfg['push_repo'],
                                   f'HEAD:refs/heads/{branch}', cwd=target, timeout=300)
             return stat_text, rc == 0
         finally:
@@ -210,6 +225,7 @@ class CodexCoder:
         cfg = self.config or load_code_config()
         if not cfg:
             raise CoderError('还没配置 /code 的仓库（codex_code.json）。')
+        cfg = with_defaults(cfg)
         if self.proot_missing:
             raise CoderError('手机上找不到 proot，无法屏蔽密钥，/code 已停用（pkg install proot 后重试）。')
         if self.lock.locked():
@@ -236,7 +252,12 @@ class CodexCoder:
             stat_text, pushed = await self.publish(cfg, work, branch, task)
             if not stat_text:
                 return CodeResult(summary, branch, outside=outside)
-            url = f"{cfg['web'].rstrip('/')}/compare/main...{branch}" if pushed else ''
+            if not pushed:
+                url = ''
+            elif cfg['push_repo'] == cfg['repo']:
+                url = f"{cfg['web'].rstrip('/')}/compare/main...{branch}"
+            else:   # 分支在单独的写入仓库里
+                url = f"{cfg['push_web'].rstrip('/')}/tree/{branch}"
             return CodeResult(summary, branch, stat_text, url, pushed, outside)
 
 

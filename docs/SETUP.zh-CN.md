@@ -293,7 +293,13 @@ bash ~/ai-codex/scripts/codex_bind_window.sh
 
 3. 要存文件，先建一次空的 `files` 分支（例如 `git switch --orphan files && git commit --allow-empty -m files && git push origin files`）。
 
-4. **建议：** 在 GitHub 上保护 `main` 分支（仓库 → Settings → Rules / Branches：要求走 PR、禁止强推、不允许部署密钥绕过规则），这样即使手机被攻破，部署密钥也只能推 `codex/*` 分支（和 `files`）。
+4. **建议：** 别让手机能改你真正的 `main`。可以在 GitHub 上保护 `main`（仓库 → Settings → Rules / Branches；私人仓库需要 GitHub Pro），或者用免费的办法：手机要写的东西全放到第二个私人仓库——主仓库的部署密钥设为**只读**，第二个仓库给可写密钥，再在 `codex_code.json` 里加：
+
+   ```json
+   "push_repo": "git@github.com:YOUR_USER/YOUR_REPO-phone.git", "push_web": "https://github.com/YOUR_USER/YOUR_REPO-phone"
+   ```
+
+   这样 `/code` 从 `repo` 读代码，把 `codex/*` 分支推到 `push_repo`；`files` 分支也放在那里（可用 `files_repo` / `files_web` 另指）。空的 `files` 分支要建在这个仓库里。不加这几项就还是单仓库。
 
 安卓不 root 没有用户命名空间，所以 `/code` 只能用 `danger-full-access`。缓解措施：
 

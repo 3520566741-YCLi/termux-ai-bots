@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from agents.codex.coder import GIT_SAFE, SECRET_RE, load_code_config
+from agents.codex.coder import GIT_SAFE, SECRET_RE, load_code_config, with_defaults
 
 BRANCH = 'files'
 MAX_FILE_BYTES = 20 * 1024 * 1024   # Telegram Bot API 下载上限 20 MB
@@ -69,7 +69,7 @@ class FileStore:
         work = self.work_dir(cfg)
         if not (Path(work) / '.git').is_dir():
             Path(work).parent.mkdir(parents=True, exist_ok=True)
-            await self.git('clone', '--quiet', '--single-branch', '--branch', BRANCH, cfg['repo'], work,
+            await self.git('clone', '--quiet', '--single-branch', '--branch', BRANCH, cfg['files_repo'], work,
                            cwd=str(Path(work).parent))
         await self.git('fetch', '--quiet', 'origin', BRANCH, cwd=work)
         await self.git('reset', '--quiet', '--hard', f'origin/{BRANCH}', cwd=work)
@@ -77,6 +77,7 @@ class FileStore:
 
     async def save(self, name: str, data: bytes, note: str = '') -> SavedFile:
         cfg = self.config or load_code_config()
+        cfg = with_defaults(cfg) if cfg else cfg
         if not cfg:
             raise FileStoreError('还没配置 GitHub 仓库（codex_code.json）。')
         if len(data) > MAX_FILE_BYTES:
@@ -105,5 +106,5 @@ class FileStore:
             await self.git('-c', 'user.name=telegram-files', '-c', 'user.email=files@localhost',
                            'commit', '--quiet', '-m', message, cwd=work)
             await self.git('push', '--quiet', 'origin', f'HEAD:refs/heads/{BRANCH}', cwd=work)
-            url = f"{cfg['web'].rstrip('/')}/blob/{BRANCH}/{quote(rel.as_posix())}"
+            url = f"{cfg['files_web'].rstrip('/')}/blob/{BRANCH}/{quote(rel.as_posix())}"
             return SavedFile(rel.as_posix(), url)

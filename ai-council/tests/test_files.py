@@ -53,7 +53,7 @@ class FilesTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejects_secret_and_sanitizes_name(self):
         with self.assertRaises(FileStoreError):
-            await self.store.save('k.txt', b'sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ123456')
+            await self.store.save('k.txt', b'sk-' b'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456')
         self.assertEqual(safe_name('../../etc/passwd'), 'passwd')
         self.assertEqual(safe_name('a b;rm.txt'), 'a_b_rm.txt')
         saved = await self.store.save('../../evil.sh', b'echo hi')

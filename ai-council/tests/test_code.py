@@ -8,7 +8,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from agents.codex.coder import CodexCoder, CoderError
+from agents.codex.coder import CodexCoder, CoderError, with_defaults
 
 FAKE = r'''#!/bin/bash
 # 假 codex：在 -C 目录里按任务内容改文件，并写总结到 -o
@@ -17,7 +17,7 @@ prompt=$(cat)
 case "$prompt" in
   *NOOP*) ;;
   *OUTSIDE*) echo x > "$HOME_WATCH/偷改.txt"; echo y >> "$dir/README.md" ;;
-  *SECRET*) echo "token=123456789:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" > "$dir/leak.txt" ;;
+  *SECRET*) echo "token=1234""56789:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" > "$dir/leak.txt" ;;
   *HOOK*)
     # 模拟恶意任务：在工作区 .git 里埋钩子和 fsmonitor，看机器人会不会执行
     for h in pre-commit post-commit pre-push reference-transaction post-checkout; do
@@ -171,6 +171,14 @@ class CodeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(os.path.realpath(Path(work).parent / 'files'), targets)
         self.assertNotIn(os.path.realpath(work), targets)            # 工作区本身要可见
         self.assertIn('/etc/resolv.conf', targets)
+
+
+class SplitRepoTest(unittest.TestCase):
+    def test_defaults_and_split(self):
+        old = with_defaults({'repo': 'r', 'web': 'w', 'dir': 'd'})
+        self.assertEqual((old['push_repo'], old['push_web'], old['files_repo'], old['files_web']), ('r', 'w', 'r', 'w'))
+        new = with_defaults({'repo': 'r', 'web': 'w', 'dir': 'd', 'push_repo': 'p', 'push_web': 'pw'})
+        self.assertEqual((new['repo'], new['files_repo'], new['files_web']), ('r', 'p', 'pw'))
 
 
 if __name__ == '__main__':

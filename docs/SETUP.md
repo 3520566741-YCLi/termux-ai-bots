@@ -293,7 +293,13 @@ bash ~/ai-codex/scripts/codex_bind_window.sh
 
 3. For file saving, create an empty `files` branch once (e.g. `git switch --orphan files && git commit --allow-empty -m files && git push origin files`).
 
-4. **Recommended:** protect `main` on GitHub (repo → Settings → Rules / Branches: require a pull request, block force pushes, and do not let deploy keys bypass the rule) so the phone's deploy key can only push `codex/*` branches (and `files`), even if the phone is compromised.
+4. **Recommended:** keep the phone away from your real `main`. Either protect `main` on GitHub (repo → Settings → Rules / Branches; for private repos this needs GitHub Pro), or — free — use a second private repo for everything the phone writes: give the main repo a **read-only** deploy key, give the second repo a writable one, and add to `codex_code.json`:
+
+   ```json
+   "push_repo": "git@github.com:YOUR_USER/YOUR_REPO-phone.git", "push_web": "https://github.com/YOUR_USER/YOUR_REPO-phone"
+   ```
+
+   `/code` then reads from `repo` and pushes `codex/*` branches to `push_repo`; the `files` branch lives there too (override with `files_repo` / `files_web`). Create the empty `files` branch in that repo. Leaving these keys out keeps the single-repo behaviour.
 
 Android without root has no user namespaces, so Codex runs `/code` with `danger-full-access`. Mitigations:
 
