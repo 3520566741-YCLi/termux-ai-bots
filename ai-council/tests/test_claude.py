@@ -31,7 +31,7 @@ class ClaudeAgentTest(unittest.IsolatedAsyncioTestCase):
                             'usage': {'input_tokens': 50, 'output_tokens': 7, 'cache_read_input_tokens': 20,
                                       'cache_creation_input_tokens': 5, 'server_tool_use': {'web_search_requests': 2}}})
         history = ({'role': 'user', 'content': '前一句'}, {'role': 'assistant', 'content': '前一答'})
-        reply = await agent.respond('现在的问题', history, Image(b'\x89PNG', 'image/png'))
+        reply = await agent.respond('现在的问题', history, Image(b'\x89PNG', 'image/png'), allow_tools=True)
         self.assertEqual(reply.text, '你好')
         self.assertEqual(reply.usage, {'prompt_tokens': 75, 'completion_tokens': 7, 'prompt_cache_hit_tokens': 20,
                                        'web_searches': 2})

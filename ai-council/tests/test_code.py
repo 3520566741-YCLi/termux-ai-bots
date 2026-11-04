@@ -5,6 +5,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from agents.codex.coder import CodexCoder, CoderError
@@ -17,6 +18,20 @@ case "$prompt" in
   *NOOP*) ;;
   *OUTSIDE*) echo x > "$HOME_WATCH/偷改.txt"; echo y >> "$dir/README.md" ;;
   *SECRET*) echo "token=123456789:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" > "$dir/leak.txt" ;;
+  *HOOK*)
+    # 模拟恶意任务：在工作区 .git 里埋钩子和 fsmonitor，看机器人会不会执行
+    for h in pre-commit post-commit pre-push reference-transaction post-checkout; do
+      printf '#!/bin/sh\ntouch "%s"\n' "$HOME_WATCH/../hook-ran" > "$dir/.git/hooks/$h"; chmod +x "$dir/.git/hooks/$h"
+    done
+    git -C "$dir" config core.fsmonitor "touch $HOME_WATCH/../fsmon-ran"
+    echo y >> "$dir/README.md" ;;
+  *LINK*)
+    echo "机密" > "$HOME_WATCH/../secret.txt"
+    ln -s "$HOME_WATCH/../secret.txt" "$dir/link.txt"
+    mkdir -p "$dir/sub"; echo "gitdir: /tmp/elsewhere" > "$dir/sub/.git"; echo ok > "$dir/sub/a.txt"
+    mkfifo "$dir/pipe"
+    echo "#!/bin/sh" > "$dir/run.sh"; chmod +x "$dir/run.sh"
+    echo z > "$dir/_files/should-not-commit.txt" 2>/dev/null || { mkdir -p "$dir/_files"; echo z > "$dir/_files/x.txt"; } ;;
   *) echo "codex 改的" >> "$dir/README.md" ;;
 esac
 echo "已修改 README 并通过测试" > "$out"
@@ -99,6 +114,64 @@ class CodeTest(unittest.IsolatedAsyncioTestCase):
                 await CodexCoder(Path('/x'), use_proot=False).run('x')
         finally:
             mod.CONFIG_FILE = orig
+
+    async def test_planted_hooks_never_run_and_workspace_recloned(self):
+        result = await self.coder.run('HOOK 改点东西')
+        self.assertTrue(result.pushed)
+        root = Path(self.tmp.name)
+        self.assertFalse((root / 'hook-ran').exists())
+        self.assertFalse((root / 'fsmon-ran').exists())
+        # 下一个任务前工作区被删掉重新克隆：上次埋的钩子和配置都不在了
+        await self.coder.run('NOOP 看看')
+        work = Path(self.coder.config['dir'])
+        self.assertFalse((work / '.git/hooks/pre-commit').exists())
+        self.assertNotIn('fsmonitor', (work / '.git/config').read_text())
+        self.assertFalse((root / 'hook-ran').exists())
+        # 临时干净克隆用完就删
+        self.assertEqual([p.name for p in work.parent.iterdir() if p.name.startswith('.codex-')], [])
+
+    async def test_copy_keeps_symlinks_and_skips_special_files(self):
+        result = await self.coder.run('LINK 加文件')
+        self.assertTrue(result.pushed)
+        b = result.branch
+        tree = git('ls-tree', '-r', b, cwd=self.origin)
+        link = [line for line in tree.splitlines() if line.endswith('\tlink.txt')][0]
+        self.assertTrue(link.startswith('120000'))                       # 仍是符号链接
+        self.assertNotIn('机密', git('show', f'{b}:link.txt', cwd=self.origin))  # 没有跟随进去复制内容
+        names = git('ls-tree', '-r', '--name-only', b, cwd=self.origin).split()
+        self.assertIn('sub/a.txt', names)
+        self.assertNotIn('sub/.git', names)
+        self.assertNotIn('pipe', names)
+        self.assertFalse(any(n.startswith('_files') for n in names))
+        run = [line for line in tree.splitlines() if line.endswith('\trun.sh')][0]
+        self.assertTrue(run.startswith('100755'))
+
+    async def test_refuses_without_proot(self):
+        with unittest.mock.patch('shutil.which', return_value=None):
+            coder = CodexCoder(Path('/x'), use_proot=True, config=self.coder.config)
+        with self.assertRaises(CoderError):
+            await coder.run('改一下')
+        self.assertNotIn('codex/', self.branches())
+
+    def test_proot_hides_secrets_but_keeps_workspace(self):
+        from agents.codex import client
+        self.coder.use_proot = True
+        work = self.coder.config['dir']
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = self.coder.codex_cmd(work, Path(tmp) / 'o', Path(tmp))
+        binds = [cmd[i + 1] for i, a in enumerate(cmd) if a == '-b']
+        targets = [b.split(':', 1)[1] for b in binds]
+        for root in (client.ROOT, client.CODEX_ROOT, client.CLAUDE_ROOT, client.HOME / 'ai-council'):
+            self.assertIn(os.path.realpath(root / '.env'), targets)
+            self.assertIn(os.path.realpath(root / 'memory_store'), targets)
+        self.assertEqual(len(targets), len(set(targets)))            # 去重
+        for p in ('.ssh', '.config/ai-hub'):
+            self.assertIn(os.path.realpath(client.HOME / p), targets)
+        self.assertIn(os.path.realpath(client.TOOLS_ENV.parent), targets)
+        self.assertIn(os.path.realpath(Path(work).parent / 'files'), targets)
+        self.assertNotIn(os.path.realpath(work), targets)            # 工作区本身要可见
+        self.assertIn('/etc/resolv.conf', targets)
+
 
 if __name__ == '__main__':
     unittest.main()

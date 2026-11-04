@@ -1,7 +1,8 @@
 """主人在 Telegram 发来的文件存到 GitHub 私人仓库的 files 分支（按日期分目录），不动 main。
 
 本地只保留一个 git 工作副本（~/codex-work/files），每次保存：拉取最新 → 写入 → 扫描疑似密钥 → 提交 → 推送。
-/code 干活前会把 files 分支的内容放到工作区的 _files/ 目录供 Codex 使用。
+/code 干活前会把 files 分支的内容放到工作区的 _files/ 目录供 Codex 使用；这个工作副本本身在 proot 里对 Codex 挂空。
+git 命令都带 GIT_SAFE（不执行钩子和 fsmonitor）。
 """
 import asyncio
 import os
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from agents.codex.coder import SECRET_RE, load_code_config
+from agents.codex.coder import GIT_SAFE, SECRET_RE, load_code_config
 
 BRANCH = 'files'
 MAX_FILE_BYTES = 20 * 1024 * 1024   # Telegram Bot API 下载上限 20 MB
@@ -54,7 +55,7 @@ class FileStore:
 
     async def git(self, *args: str, cwd: str, timeout: int = 300) -> str:
         proc = await asyncio.create_subprocess_exec(
-            'git', *args, cwd=cwd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+            'git', *GIT_SAFE, *args, cwd=cwd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT, start_new_session=True, env=dict(os.environ, GIT_TERMINAL_PROMPT='0'))
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
         if proc.returncode != 0:

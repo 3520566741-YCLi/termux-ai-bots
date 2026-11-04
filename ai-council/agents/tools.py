@@ -2,7 +2,10 @@
 
 密钥在 ~/.config/ai-tools/.env（权限 600）：GITHUB_TOKEN（细粒度令牌，只给 Contents/Metadata 读权限）、
 TAVILY_API_KEY、NOTION_TOKEN（内部集成密钥，只能看到主人给它开了“连接”的页面）、NOTION_PARENT_PAGE_ID
-（默认保存到的页面）。没配的工具不会提供给模型。GitHub 与搜索只读；Notion 只新建页面、追加内容，不删除不改写。
+（保存到的页面）。没配的工具不会提供给模型。GitHub 与搜索只读；Notion 只新建页面、追加内容，不删除不改写。
+权限分级（由机器人按请求决定，见 gateway/telegram/bot.py）：工具只给主人；Notion 读（search/read_page）只给主人，
+Notion 写（create_page/append）只在主人这句话明确要求保存时才给；新页面固定建在 NOTION_PARENT_PAGE_ID 下，
+追加只允许追加到这个页面本身或它的直接子页面。执行时也按“这次给了哪些工具”再查一遍（call 的 allowed）。
 DeepSeek（OpenAI 格式）和 Claude（Anthropic 格式）直接调用；Codex 经 tool_gateway + MCP 调用，拿不到密钥本身。
 """
 import base64
@@ -28,6 +31,8 @@ MAX_FILE_CHARS = 15000
 MAX_RESULT_CHARS = 16000
 REPO_RE = re.compile(r'^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$')
 TIMEOUT = 30
+MAX_CALLS_PER_ROUND = 4      # 模型一轮最多执行几个工具调用，多出来的回“已跳过”
+SKIPPED = '没有执行：一次最多调用 4 个工具，请先根据已有结果继续。'
 
 SPECS = {
     'github_list_repos': ('列出主人在 GitHub 上能访问的仓库（含私人仓库），按最近更新排序。', {}, []),
@@ -48,17 +53,19 @@ SPECS = {
                       {'query': ('string', '搜索关键词，留空列出最近的页面')}, []),
     'notion_read_page': ('读取一个 Notion 页面的正文（太长会截短）。',
                          {'page': ('string', '页面 ID 或页面链接')}, ['page']),
-    'notion_create_page': ('在 Notion 新建一个页面保存内容。只在主人明确要求保存/记到 Notion 时使用。'
+    'notion_create_page': ('在 Notion 的“AI 笔记”页下新建一个页面保存内容。只在主人明确要求保存/记到 Notion 时使用。'
                            '正文用纯文本，支持“# 标题”“## 小标题”“- 列表”“1. 编号”“[] 待办”这些行首写法。',
                            {'title': ('string', '页面标题'),
-                            'content': ('string', '正文'),
-                            'parent': ('string', '放在哪个页面下（ID 或链接），留空放到默认的“AI 笔记”页')},
+                            'content': ('string', '正文')},
                            ['title', 'content']),
-    'notion_append': ('在一个已有的 Notion 页面末尾追加内容。只在主人明确要求时使用。',
+    'notion_append': ('在“AI 笔记”页或它下面的某个页面末尾追加内容。只在主人明确要求时使用。',
                       {'page': ('string', '页面 ID 或页面链接'), 'content': ('string', '要追加的正文')},
                       ['page', 'content']),
 }
 NOTION_TOOLS = tuple(n for n in SPECS if n.startswith('notion_'))
+NOTION_READ = ('notion_search', 'notion_read_page')
+NOTION_WRITE = ('notion_create_page', 'notion_append')
+NOTION_LEVELS = ('', 'read', 'write')   # 不给 / 只读 / 读写
 GITHUB_TOOLS = tuple(n for n in SPECS if n.startswith('github_'))
 
 
@@ -87,15 +94,19 @@ class Toolkit:
         self.notion_parent = (values.get('NOTION_PARENT_PAGE_ID') or '').strip()
         self._login: Optional[str] = None
 
-    def names(self, web: bool = True, notion: bool = False) -> list:
+    def names(self, web: bool = True, notion='') -> list:
+        """notion：'' 不给，'read' 只给查看，'write' 查看加保存（True 当作 'write'，兼容旧调用）。"""
+        level = 'write' if notion is True else (notion or '')
         out = list(GITHUB_TOOLS) if self.github_token else []
         if web and self.tavily_key:
             out.append('web_search')
-        if notion and self.notion_token:
-            out += list(NOTION_TOOLS)
+        if level in ('read', 'write') and self.notion_token:
+            out += list(NOTION_READ)
+        if level == 'write' and self.notion_token and self.notion_parent:
+            out += list(NOTION_WRITE)
         return out
 
-    def openai_tools(self, web: bool = True, notion: bool = False) -> list:
+    def openai_tools(self, web: bool = True, notion='') -> list:
         return [{'type': 'function', 'function': {'name': n, 'description': SPECS[n][0], 'parameters': _schema(n)}}
                 for n in self.names(web, notion)]
 
@@ -105,10 +116,13 @@ class Toolkit:
     def mcp_tools(self, web: bool = False) -> list:
         return [{'name': n, 'description': SPECS[n][0], 'inputSchema': _schema(n)} for n in self.names(web)]
 
-    async def call(self, name: str, args: dict) -> str:
-        """执行工具，返回给模型看的文字；出错也返回文字（不抛给上层）。"""
+    async def call(self, name: str, args: dict, allowed=None) -> str:
+        """执行工具，返回给模型看的文字；出错也返回文字（不抛给上层）。
+
+        allowed：这次请求实际提供给模型的工具名；模型调用没提供的工具（比如没给写权限却要建 Notion 页面）一律拒绝。"""
         try:
-            if name not in SPECS or name not in self.names(web=True, notion=True):
+            if name not in SPECS or name not in self.names(web=True, notion='write') \
+                    or (allowed is not None and name not in allowed):
                 raise ToolError(f'没有可用的工具 {name}')
             if not isinstance(args, dict):
                 raise ToolError('参数必须是 JSON 对象')
@@ -291,8 +305,8 @@ class Toolkit:
             cursor = data.get('next_cursor')
         return '\n'.join(out)
 
-    async def _notion_create_page(self, title, content, parent='') -> str:
-        parent_id = self._page_id(parent or self.notion_parent)
+    async def _notion_create_page(self, title, content) -> str:
+        parent_id = self._page_id(self.notion_parent)   # 固定建在“AI 笔记”页下，模型不能指定别的位置
         blocks = self._blocks(content)
         page = await self._notion('POST', '/pages', {
             'parent': {'page_id': parent_id},
@@ -303,6 +317,17 @@ class Toolkit:
 
     async def _notion_append(self, page, content) -> str:
         page_id = self._page_id(page)
+        root = self._page_id(self.notion_parent)
+        if page_id != root:
+            # 只能追加到“AI 笔记”页本身或它的直接子页面，别的页面（主人其他笔记）不动
+            info = await self._notion('GET', f'/pages/{page_id}')
+            parent = (info.get('parent') or {}) if isinstance(info, dict) else {}
+            try:
+                ok = parent.get('type', 'page_id') == 'page_id' and self._page_id(parent.get('page_id')) == root
+            except ToolError:
+                ok = False
+            if not ok:
+                raise ToolError('只能追加到“AI 笔记”页或它下面的页面')
         blocks = self._blocks(content)
         if not blocks:
             raise ToolError('没有要追加的内容')

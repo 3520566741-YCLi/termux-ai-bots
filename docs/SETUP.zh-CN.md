@@ -169,6 +169,8 @@ mkdir -p ~/.shortcuts && install -m 700 $src/AI-Bots ~/.shortcuts/AI-Bots      #
 termux-job-scheduler --job-id 4242 --period-ms 900000 --script ~/.local/share/ai-hub/ensure.sh
 ```
 
+控制台每次启动都会生成新的随机访问 token（文件权限 600），所以重启后旧的控制台链接会失效。`ai-hub open` 把 token 交给浏览器之前，会先确认 8765 端口上真的是这个控制台（让它对一个随机挑战算 HMAC 并核对）；端口被别的程序占用时不打开浏览器，并给出提示。
+
 **检查：** `ai-hub status` 列出 `deepseek`、`codex`、`claude`，都是“已停止”。长按主屏幕 → 小组件 → Termux:Widget → 添加，点 **AI-Bots**：浏览器打开控制台。
 
 ## 9. 安装并登录 Codex 命令行
@@ -218,7 +220,7 @@ termux-job-scheduler --job-id 4242 --period-ms 900000 --script ~/.local/share/ai
 
 - **GitHub** —— <https://github.com/settings/personal-access-tokens> → 细粒度令牌（fine-grained）→ Repository access 选 **All repositories** → 权限只给 **Contents: Read-only**（Metadata 只读会自动加上）。别的都不要。
 - **Tavily**（DeepSeek 的联网搜索）—— 在 <https://app.tavily.com> 获取 key。
-- **Notion**（只给 DeepSeek）—— <https://www.notion.so/profile/integrations> → 新建**内部（internal）**连接 → 能力选 **读取内容、更新内容、插入内容**（用户信息：不需要或不含邮箱）。在连接的 **内容访问权限（Content access）** 里勾选它能看到的页面。建一个保存笔记用的页面（例如“AI 笔记”）并勾选；页面 ID 是链接末尾的 32 位十六进制 —— 直接粘贴整个链接也行。
+- **Notion**（只给 DeepSeek）—— <https://www.notion.so/profile/integrations> → 新建**内部（internal）**连接 → 能力选 **读取内容、更新内容、插入内容**（用户信息：不需要或不含邮箱）。在连接的 **内容访问权限（Content access）** 里勾选它能看到的页面。建一个保存笔记用的页面（例如“AI 笔记”）并勾选；页面 ID 是链接末尾的 32 位十六进制 —— 直接粘贴整个链接也行。只有**主人**这句话里有保存意图（保存、存到、记到、整理到、写进、Notion、笔记等）时，DeepSeek 才拿到 Notion 写入工具；新页面固定建在 `NOTION_PARENT_PAGE_ID` 下，追加只能追加到这个页面或它的直接子页面，从不删除、不改写已有内容。
 
 ```bash
 $S --field GITHUB_TOKEN
@@ -250,13 +252,13 @@ for d in ai-council ai-claude ai-codex; do grep bot_ready ~/$d/logs/bot.log | ta
 
 ## 12. 绑定 Codex 主人
 
-Codex 用你的订阅，而且能读手机上的文件，所以只允许一个 Telegram 用户（你）使用。发起讨论也要求先绑定。
+Codex 用你的订阅，而且能读手机上的文件，所以只允许一个 Telegram 用户（你）使用。发起讨论也要求先绑定；DeepSeek 和 Claude 也只给这位主人工具和对话记忆。
 
 ```bash
 bash ~/ai-codex/scripts/codex_bind_window.sh
 ```
 
-（或在控制台 Codex 卡片上点 **开放 Codex 绑定（30 分钟）**。）30 分钟内在群里发 `/codexbind@example_codex_bot`。
+（或在控制台 Codex 卡片上点 **开放 Codex 绑定（30 分钟）**。）脚本（或按钮）会显示一次性 **6 位绑定码**。30 分钟内在群里发 `/codexbind@example_codex_bot 绑定码`（私聊里发 `/codexbind 绑定码` 即可）。码不对不会绑定，输错 5 次窗口自动关闭，绑定成功后码作废。
 
 **检查：** `~/ai-codex/codex_owner.json` 已存在，机器人回复“已绑定”。以后要换人，删掉这个文件再做一遍。
 
@@ -272,6 +274,8 @@ bash ~/ai-codex/scripts/codex_bind_window.sh
 ## 14. 可选：`/code` 和把文件存到 GitHub（Codex）
 
 `/code 任务` 让 Codex 在手机上的仓库副本里改代码、提交，并推一个新的 `codex/<时间>` 分支（绝不推 `main`）。发给 Codex 机器人的文件存到同一仓库的 `files` 分支。
+
+> **`/code` 等于在手机上执行任意代码。** 每个任务——以及 Codex 干活时读到的一切（仓库内容、`_files/` 里的文件）——都要当成以你的 Termux 用户身份运行的代码看待。只有绑定的主人能触发。
 
 1. 给手机建 SSH 密钥，在那个仓库里加为**有写权限的部署密钥（deploy key）**：
 
@@ -289,7 +293,17 @@ bash ~/ai-codex/scripts/codex_bind_window.sh
 
 3. 要存文件，先建一次空的 `files` 分支（例如 `git switch --orphan files && git commit --allow-empty -m files && git push origin files`）。
 
-安卓不 root 没有用户命名空间，所以 `/code` 只能用 `danger-full-access`；机器人用 proot 屏蔽密钥、推送前扫描改动里疑似密钥的内容、并报告仓库以外被改动的文件。这是约束和事后检查，不是隔离。
+4. **建议：** 在 GitHub 上保护 `main` 分支（仓库 → Settings → Rules / Branches：要求走 PR、禁止强推、不允许部署密钥绕过规则），这样即使手机被攻破，部署密钥也只能推 `codex/*` 分支（和 `files`）。
+
+安卓不 root 没有用户命名空间，所以 `/code` 只能用 `danger-full-access`。缓解措施：
+
+- 每个任务都先删掉旧工作区，从 `origin/main` **重新克隆**，上一个任务埋下的钩子、git 配置不会留到这次。
+- Codex 跑完后，机器人绝不在它碰过的目录里执行 git：把文件复制到另一个干净的克隆（跳过 `.git` 和 `_files/`，符号链接按链接本身复制、不跟随，FIFO/设备等跳过），扫描改动里疑似密钥的内容，再提交并只推 `codex/<时间>` 分支。
+- 机器人和控制台的每条 git 命令都带 `-c core.hooksPath=/dev/null -c core.fsmonitor=false`，**git 钩子和 fsmonitor 一律不执行**。
+- **用 proot 屏蔽密钥**：三个实例的 `.env` 和 `memory_store/`、`~/.ssh`（Codex 拿不到推送密钥）、`~/.config/ai-hub`、`~/.config/ai-tools`、`~/codex-work/files` 都挂成空目录。找不到 `proot` 时 `/code` 直接拒绝。
+- 任务后扫描主目录里仓库以外被改动的文件，并在回复里提醒。
+
+仍然存在的风险：这不是隔离。Codex 仍能联网、起后台进程、改 proot 没屏蔽的任何文件（包括机器人自己的代码、`~/.bashrc`、`~/.gitconfig`、启动脚本），也能读到它自己的 ChatGPT 登录文件；事后扫描只是提醒，不会拦截。
 
 **检查：** `/code 在 README 加一行 hello` → 回复里有 `compare/main...codex/...` 链接。
 
@@ -297,10 +311,12 @@ bash ~/ai-codex/scripts/codex_bind_window.sh
 
 ## 安全说明
 
-- 允许的聊天里**每个人**都能用 DeepSeek 和 Claude —— 包括它们的工具。配置了 GitHub 令牌后，**他们能通过机器人读你的私人仓库**；通过 DeepSeek 还能读取和追加你共享给连接的 Notion 页面。只允许你完全信任的聊天。
-- Codex 只给主人用，因为它能在手机上执行命令，而且它自己的登录文件无法对它屏蔽。
+- **只有绑定的主人有工具和记忆。** 主人提问时，DeepSeek 和 Claude 会用 GitHub（含私人仓库）、联网搜索和 Notion，并记住对话。允许的聊天里其他人只得到不带工具的普通回答，这些问答不进记忆、也看不到记忆，且每人每个聊天**每小时最多 10 次**。即便如此，也只允许你信任的聊天：他们花的是你的 API 余额。
+- 只有主人这句话要求保存时才写 Notion，而且总是写在 `NOTION_PARENT_PAGE_ID` 下。
+- Codex 只给主人用，因为它能在手机上执行命令，而且它自己的登录文件无法对它屏蔽。`/code` 等于执行任意代码 —— 缓解措施和剩余风险见第 14 步。
+- `/codexbind` 需要 `scripts/codex_bind_window.sh` 显示的 6 位绑定码，窗口开着时群里别人也抢不走机器人。
 - 机器人日志只记事件名和数字（没有消息正文、没有密钥）。ai-hub 显示时还会隐藏 chat/用户 ID 和疑似密钥。
-- 控制台只监听 127.0.0.1，需要随机 token；20 分钟没人访问自动退出。
+- 控制台只监听 127.0.0.1，需要随机 token，每次启动控制台都会换新 token；打开浏览器前先核对 8765 端口上确实是控制台本身。20 分钟没人访问自动退出。
 - 机器人重启时会故意丢弃排队中的 Telegram 消息（避免重复付费）。
 
 ## 更新
@@ -333,23 +349,31 @@ install -m 700 ~/ai-bots-src/ai-hub/ai_hub.py ~/.local/bin/ai-hub && cp -r ~/ai-
 
 ## 附录：用电脑经 adb 发送密钥（可选）
 
-想在电脑上打字的话，`scripts/receive_bot_token.py` 在手机的 `127.0.0.1:38421` 上一次性监听（10 分钟超时），电脑用 USB 转发端口。
+想在电脑上打字的话，`scripts/receive_bot_token.py` 在手机的 `127.0.0.1:38421` 上一次性监听（10 分钟超时），电脑用 USB 转发端口。它需要一次性 **nonce**：发送方要把 `<nonce> <密钥>` 作为一行发过去。nonce 不对、或收到的内容像 HTTP 请求（比如电脑浏览器里的网页往 `127.0.0.1:38421` 发请求）时一律拒绝，什么都不保存。
+
+先在电脑上生成 nonce：
+
+```bash
+openssl rand -hex 16        # 例如 3f9c… —— 两边用同一个值
+```
 
 手机（Termux），在实例目录里：
 
 ```bash
-cd ~/ai-claude && AI_BOT_ROOT=$PWD .venv/bin/python scripts/receive_bot_token.py --role claude --field ANTHROPIC_API_KEY
+cd ~/ai-claude && AI_BOT_ROOT=$PWD .venv/bin/python scripts/receive_bot_token.py --role claude --nonce <nonce> --field ANTHROPIC_API_KEY
 ```
 
-电脑（打开 USB 调试）：
+电脑（打开 USB 调试），把 `<nonce>` 换成上面的值：
 
 ```bash
 adb forward tcp:38421 tcp:38421
 # zsh（macOS 默认）—— 注意是  变量名?提示  的写法；zsh 里 `read -p` 是另一个意思：
-read -rs 'k?Secret: '; echo; printf '%s\n' "$k" | nc 127.0.0.1 38421; unset k
+read -rs "T?粘贴密钥后回车：" && printf '%s %s\n' <nonce> "$T" | nc 127.0.0.1 38421; unset T
 # bash：
-read -rsp 'Secret: ' k; echo; printf '%s\n' "$k" | nc 127.0.0.1 38421; unset k
+read -rsp '粘贴密钥后回车：' T && printf '%s %s\n' <nonce> "$T" | nc 127.0.0.1 38421; unset T
 adb forward --remove tcp:38421
 ```
 
-macOS 终端粘贴时会加上“粘贴保护”控制符；接收脚本会去掉它们并提取密钥。共用工具的密钥放 `~/.config/ai-tools`：运行接收脚本时用 `AI_BOT_ROOT=~/.config/ai-tools`、`--role deepseek`（必填但不用）和 `--field GITHUB_TOKEN`（或 `TAVILY_API_KEY`、`NOTION_TOKEN`）。
+在手机上直接输入的 `scripts/set_secret.py` 不走网络，不需要 nonce。
+
+macOS 终端粘贴时会加上“粘贴保护”控制符；接收脚本会去掉它们并提取密钥。共用工具的密钥放 `~/.config/ai-tools`：运行接收脚本时用 `AI_BOT_ROOT=~/.config/ai-tools`、`--role deepseek`（必填但不用）、`--nonce <nonce>` 和 `--field GITHUB_TOKEN`（或 `TAVILY_API_KEY`、`NOTION_TOKEN`）。

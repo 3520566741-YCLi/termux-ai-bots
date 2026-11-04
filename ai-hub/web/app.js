@@ -151,7 +151,11 @@ async function refresh(manual) {
     if (data.error) throw new Error(data.error);
     render(data);
   } catch (e) {
-    botsEl.innerHTML = `<div class="empty">${e.message.includes('未授权') ? '请从手机桌面的 AI-Bots 按钮重新打开控制台。' : '连接失败：' + e.message}</div>`;
+    // 错误文字可能来自服务器返回内容，只当纯文本显示，不当 HTML 解析
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = e.message.includes('未授权') ? '请从手机桌面的 AI-Bots 按钮重新打开控制台。' : '连接失败：' + e.message;
+    botsEl.replaceChildren(empty);
   } finally {
     setTimeout(() => btn.classList.remove('spin'), 300);
   }

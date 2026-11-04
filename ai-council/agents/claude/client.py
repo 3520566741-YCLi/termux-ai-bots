@@ -8,6 +8,8 @@
   每次搜索另收 $0.01。服务器端工具循环太长时会返回 pause_turn，原样接着请求即可。
 - GitHub：agents/tools.py 的只读工具（客户端工具，在手机上执行）；stop_reason 为 tool_use 时执行并把结果接回。
 - 思考默认自适应；聊天用 effort=low，省 token、回得快。
+- 工具（官方网页搜索和 GitHub）只给主人：respond(allow_tools=False) 时不带任何工具，只按模型自身知识回答。
+- 一轮最多执行 MAX_CALLS_PER_ROUND 个工具调用，多出的回 is_error 的 tool_result。
 """
 import base64
 from typing import Optional, Sequence
@@ -15,7 +17,7 @@ from typing import Optional, Sequence
 import httpx
 
 from agents.base import Image, Reply
-from agents.tools import Toolkit
+from agents.tools import MAX_CALLS_PER_ROUND, SKIPPED, Toolkit
 from config import Config, REQUEST_TIMEOUT
 
 API_VERSION = '2026-10-21'
@@ -41,18 +43,24 @@ class ClaudeAgent:
         self.search = search
         self.toolkit = toolkit
 
-    async def _post(self, messages: list) -> dict:
+    def _tools(self, allow_tools: bool) -> list:
+        if not allow_tools:
+            return []
+        tools = [{'type': 'web_search_20260209', 'name': 'web_search', 'max_uses': MAX_SEARCHES}] if self.search else []
+        if self.toolkit:
+            tools += self.toolkit.anthropic_tools(web=False)   # 网页搜索用官方的，这里只加 GitHub 工具
+        return tools
+
+    async def _post(self, messages: list, tools: list) -> dict:
+        github = any(t.get('name', '').startswith('github_') for t in tools)
         body = {
             'model': self.config.model,
             'max_tokens': MAX_TOKENS,
-            'system': SYSTEM + (GITHUB_HINT if self.toolkit and self.toolkit.names(web=False) else ''),
+            'system': SYSTEM + (GITHUB_HINT if github else ''),
             'messages': messages,
             'output_config': {'effort': self.effort},
             'fallbacks': 'default',
         }
-        tools = [{'type': 'web_search_20260209', 'name': 'web_search', 'max_uses': MAX_SEARCHES}] if self.search else []
-        if self.toolkit:
-            tools += self.toolkit.anthropic_tools(web=False)   # 网页搜索用官方的，这里只加 GitHub 工具
         if tools:
             body['tools'] = tools
         response = await self.client.post(
@@ -65,7 +73,11 @@ class ClaudeAgent:
         response.raise_for_status()
         return response.json()
 
-    async def respond(self, text: str, history: Sequence[dict] = (), image: Optional[Image] = None) -> Reply:
+    async def respond(self, text: str, history: Sequence[dict] = (), image: Optional[Image] = None,
+                      allow_tools: bool = False, notion: str = '') -> Reply:
+        """allow_tools：是否给工具（只有主人才给）。notion 不适用于 Claude（Notion 只给 DeepSeek）。"""
+        tools = self._tools(allow_tools)
+        allowed = {t['name'] for t in tools if t.get('name', '').startswith('github_')}
         content: object = text
         if image:
             data = base64.b64encode(image.data).decode()
@@ -75,7 +87,7 @@ class ClaudeAgent:
         parts: list[str] = []
         totals = {'in': 0, 'out': 0, 'hit': 0, 'searches': 0}
         for _ in range(MAX_CONTINUES + 1):
-            data = await self._post(messages)
+            data = await self._post(messages, tools)
             raw = data.get('usage') or {}
             hit = int(raw.get('cache_read_input_tokens') or 0)
             totals['in'] += int(raw.get('input_tokens') or 0) + hit + int(raw.get('cache_creation_input_tokens') or 0)
@@ -86,14 +98,18 @@ class ClaudeAgent:
                 raise ClaudeRefused()
             blocks = data.get('content') or []
             stop = data.get('stop_reason')
-            if stop == 'tool_use' and self.toolkit:
-                # 执行 GitHub 工具，结果全部放在同一条 user 消息里接回去
+            if stop == 'tool_use':
+                # 执行 GitHub 工具，结果全部放在同一条 user 消息里接回去；超出上限或没给工具的只回“已跳过”
                 results = []
                 for b in blocks:
                     if b.get('type') == 'tool_use':
-                        text = await self.toolkit.call(b.get('name', ''), b.get('input') or {})
-                        results.append({'type': 'tool_result', 'tool_use_id': b.get('id'), 'content': text,
-                                        **({'is_error': True} if text.startswith('出错：') else {})})
+                        if len(results) >= MAX_CALLS_PER_ROUND or not self.toolkit:
+                            results.append({'type': 'tool_result', 'tool_use_id': b.get('id'), 'content': SKIPPED,
+                                            'is_error': True})
+                            continue
+                        out = await self.toolkit.call(b.get('name', ''), b.get('input') or {}, allowed)
+                        results.append({'type': 'tool_result', 'tool_use_id': b.get('id'), 'content': out,
+                                        **({'is_error': True} if out.startswith('出错：') else {})})
                 messages = [*messages, {'role': 'assistant', 'content': blocks}, {'role': 'user', 'content': results}]
                 continue
             parts.append(''.join(b.get('text', '') for b in blocks if b.get('type') == 'text'))

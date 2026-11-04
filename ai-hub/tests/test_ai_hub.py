@@ -9,7 +9,9 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parents[1]
 
@@ -212,6 +214,58 @@ class AiHubTest(unittest.TestCase):
     def test_token_file_private(self):
         self.hub.token()
         self.assertEqual(oct(self.hub.TOKEN_FILE.stat().st_mode & 0o777), '0o600')
+
+    def test_token_rotates_and_stays_private(self):
+        first = self.hub.token()
+        second = self.hub.rotate_token()
+        self.assertNotEqual(first, second)
+        self.assertEqual(self.hub.token(), second)
+        self.assertEqual(oct(self.hub.TOKEN_FILE.stat().st_mode & 0o777), '0o600')
+
+    def test_hello_proves_identity_without_token(self):
+        challenge = 'ab' * 16
+        code, body = self.request(f'/api/hello?c={challenge}')
+        self.assertEqual(code, 200)
+        mac = json.loads(body)['mac']
+        self.assertEqual(mac, self.hub.hello_mac(self.hub.token(), challenge))
+        self.assertNotIn(self.hub.token(), body.decode())
+        self.assertEqual(self.request('/api/hello?c=zz')[0], 400)
+        self.assertEqual(self.hub.server_identity(), 'ok')
+
+    def test_open_refuses_when_port_squatted(self):
+        class Squatter(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps({'mac': '0' * 64}).encode()
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        squat = HTTPServer(('127.0.0.1', 0), Squatter)
+        threading.Thread(target=squat.serve_forever, daemon=True).start()
+        try:
+            with patch.object(self.hub, 'PORT', squat.server_address[1]), \
+                    patch.object(self.hub, 'ensure', lambda: []), \
+                    patch.object(self.hub.subprocess, 'run') as run, \
+                    patch.object(self.hub.subprocess, 'Popen') as popen, \
+                    patch('builtins.print') as printed:
+                self.assertEqual(self.hub.server_identity(), 'other')
+                self.assertFalse(self.hub.open_ui())
+                run.assert_not_called()          # 没有把带 token 的链接交给浏览器
+                popen.assert_not_called()
+                self.assertIn('占用', printed.call_args.args[0])
+        finally:
+            squat.shutdown()
+        # 没人监听：判为 down，不是 other
+        with patch.object(self.hub, 'PORT', 1):
+            self.assertEqual(self.hub.server_identity(), 'down')
+
+    def test_open_hands_token_only_to_verified_console(self):
+        with patch.object(self.hub, 'ensure', lambda: []), patch.object(self.hub.subprocess, 'run') as run:
+            self.assertTrue(self.hub.open_ui())
+        url = run.call_args.args[0][-1]
+        self.assertTrue(url.endswith('#' + self.hub.token()))
 
 
 if __name__ == '__main__':

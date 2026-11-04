@@ -102,6 +102,17 @@ class StorageTest(unittest.TestCase):
         self.assertIn('没有删除', message)
         self.assertTrue((self.files / '2026-10-20' / 'a.txt').exists())
 
+    def test_planted_hooks_never_run(self):
+        # /code 里的 Codex 能写 ~/codex-work/files：埋下的钩子和 fsmonitor 不能在 AI 中枢删除文件时执行
+        hook = self.files / '.git' / 'hooks' / 'pre-commit'
+        marker = self.tmp / 'hook-ran'
+        hook.write_text(f'#!/bin/sh\ntouch {marker}\n')
+        hook.chmod(0o755)
+        git('config', 'core.fsmonitor', f'sh -c "touch {marker}"', cwd=self.files)
+        ok, _ = self.hub.delete_files(['2026-10-20/a.txt'])
+        self.assertTrue(ok)
+        self.assertFalse(marker.exists())
+
 
 if __name__ == '__main__':
     unittest.main()

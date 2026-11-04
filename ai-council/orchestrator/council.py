@@ -51,9 +51,16 @@ class Council:
         self.memory.pop(chat_id, None)
         self._save()
 
-    async def respond(self, chat_id: int, text: str, image: Optional[Image] = None) -> Reply:
+    async def respond(self, chat_id: int, text: str, image: Optional[Image] = None,
+                      allow_tools: bool = False, notion: str = '') -> Reply:
+        """allow_tools=True 只给主人：带工具、读写这个聊天的记忆。
+
+        非主人（allow_tools=False）：不给工具、看不到记忆、这一问一答也不记进记忆，
+        避免群里别人借记忆或工具读到主人的私人仓库、Notion 和之前的对话。"""
+        if not allow_tools:
+            return await self.agent.respond(text, (), image, allow_tools=False)
         history = self.history(chat_id)
-        reply = await self.agent.respond(text, tuple(history), image)
+        reply = await self.agent.respond(text, tuple(history), image, allow_tools=True, notion=notion)
         # 记忆里只留文字，不重复上传图片。
         self.remember(chat_id, f'[图片] {text}' if image else text, reply.text)
         return reply

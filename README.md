@@ -29,13 +29,15 @@ Claude uses plain HTTP because the official Python SDK pulls in Rust extensions 
 - At the end **Codex always writes a combined summary** of everyone's proposals.
 - Telegram bots cannot see each other's messages, so the DeepSeek process asks each model in turn and posts with each bot's own token.
 
-**Tools** (keys live in one shared file, `~/.config/ai-tools/.env`; anything not configured is simply not offered):
+**Tools** (keys live in one shared file, `~/.config/ai-tools/.env`; anything not configured is simply not offered). **Only the bound owner gets tools and memory**; everyone else in an allowed chat gets plain answers without tools or memory, limited to 10 per hour:
 
 - **Web search** — DeepSeek via Tavily; Claude via Anthropic's server-side web search (≤ 3 per question); Codex via `codex --search`.
 - **GitHub (read-only)** — list repos, browse directories, read files, search code, including private repos. Codex never sees the token: it talks to a local one-time gateway over MCP.
-- **Notion (DeepSeek only)** — search, read, create sub-pages, append. Never deletes or rewrites. Say "save this discussion to Notion".
+- **Notion (DeepSeek only)** — search, read, create sub-pages, append. Never deletes or rewrites. Write tools are offered only when the owner's message asks to save, and pages always go under `NOTION_PARENT_PAGE_ID`. Say "save this discussion to Notion".
 
-**ai-hub console** — a local web page (127.0.0.1 only, token-protected) to start/stop/restart each bot, see uptime, today's requests and estimated cost, recent (redacted) logs, and a watchdog that restarts bots killed by Android.
+**`/code` is full code execution on the phone** (owner only): every task uses a fresh clone, git hooks are disabled, secrets are hidden via proot — but Codex can still reach the network and change unhidden files. See [docs/SETUP.md](docs/SETUP.md) step 14, and protect `main` on GitHub so the deploy key can only push `codex/*` branches.
+
+**ai-hub console** — a local web page (127.0.0.1 only, protected by a token that rotates each time the console starts; the console's identity is verified before the browser opens) to start/stop/restart each bot, see uptime, today's requests and estimated cost, recent (redacted) logs, and a watchdog that restarts bots killed by Android.
 
 ## Architecture
 

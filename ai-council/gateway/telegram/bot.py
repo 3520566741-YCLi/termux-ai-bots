@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import re
+import secrets
+from collections import deque
 from logging.handlers import RotatingFileHandler
 import subprocess
 import time
@@ -119,6 +121,37 @@ def my_turn(message, context) -> bool:
     return not addressed_to_other_bot(message, context)
 
 
+# ---------- 主人与非主人 ----------
+# DeepSeek / Claude 只给主人工具（GitHub 私人仓库、搜索、Notion）和对话记忆；群里其他人只得到不带工具的普通回答，
+# 也不进记忆。非主人每人每个聊天每小时最多 NON_OWNER_LIMIT 次，避免花光 API 余额。
+NON_OWNER_LIMIT = 10
+NON_OWNER_WINDOW = 3600
+# 主人这句话里有“保存”意图时才给 Notion 写工具
+SAVE_RE = re.compile(r'保存|存到|存进|记到|记下|整理到|写到|写进|notion|笔记', re.I)
+
+
+def user_id(update):
+    return getattr(update.effective_user, 'id', None)
+
+
+def notion_level(role: str, owner: bool, text: str) -> str:
+    if role != 'deepseek' or not owner:
+        return ''
+    return 'write' if SAVE_RE.search(text or '') else 'read'
+
+
+def non_owner_allowed(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id) -> bool:
+    hits = context.bot_data.setdefault('non_owner_hits', {})
+    now = time.monotonic()
+    recent = hits.setdefault((chat_id, user_id), deque())
+    while recent and now - recent[0] >= NON_OWNER_WINDOW:
+        recent.popleft()
+    if len(recent) >= NON_OWNER_LIMIT:
+        return False
+    recent.append(now)
+    return True
+
+
 def cooled_down(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> bool:
     now = time.monotonic()
     if now - context.bot_data['last_request'].get(chat_id, -float('inf')) < 5:
@@ -145,7 +178,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not cooled_down(context, message.chat_id):
         await message.reply_text('请稍等几秒再提问。')
         return
-    await answer(message, context, text)
+    await answer(message, context, text, owner=is_codex_owner(update), user_id=user_id(update))
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -178,6 +211,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     elif not cooled_down(context, message.chat_id):
         await message.reply_text('请稍等几秒再提问。')
         return
+    owner = is_codex_owner(update)
+    if not codex_role and not owner and not non_owner_allowed(context, message.chat_id, user_id(update)):
+        await message.reply_text(f'每小时最多问 {NON_OWNER_LIMIT} 次，请稍后再来。')
+        return
     try:
         data = bytes(await (await item.get_file()).download_as_bytearray())
     except TelegramError as error:
@@ -192,18 +229,28 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if codex_role:
         await start_codex(update, context, text, Image(data, mime))
         return
-    await answer(message, context, text, Image(data, mime))
+    await answer(message, context, text, Image(data, mime), owner=owner, user_id=user_id(update),
+                 counted=True)
 
 
-async def answer(message, context: ContextTypes.DEFAULT_TYPE, text: str, image: Optional[Image] = None) -> None:
+async def answer(message, context: ContextTypes.DEFAULT_TYPE, text: str, image: Optional[Image] = None,
+                 owner: bool = False, user_id=None, counted: bool = False) -> None:
+    """owner=True 才给工具和记忆；非主人限次数（counted=True 表示调用方已经计过数）。"""
     chat_id = message.chat_id
     now = time.monotonic()
     role = context.bot_data['config'].role
     name = AGENT_NAMES.get(role, role)
-    log.info('request chat=%s message=%s kind=%s', chat_id, message.message_id, 'image' if image else 'text')
+    if not owner and not counted and not non_owner_allowed(context, chat_id, user_id):
+        await message.reply_text(f'每小时最多问 {NON_OWNER_LIMIT} 次，请稍后再来。')
+        return
+    log.info('request chat=%s message=%s kind=%s owner=%s', chat_id, message.message_id, 'image' if image else 'text',
+             int(owner))
     try:
         # 查 GitHub、上网搜索要多轮请求，总时间放宽到 3 倍
-        reply = await asyncio.wait_for(context.bot_data['council'].respond(chat_id, text, image), REQUEST_TIMEOUT * 3)
+        reply = await asyncio.wait_for(
+            context.bot_data['council'].respond(chat_id, text, image, allow_tools=owner,
+                                                notion=notion_level(role, owner, text)),
+            REQUEST_TIMEOUT * 3)
     except (asyncio.TimeoutError, httpx.TimeoutException):
         log.warning('%s_timeout chat=%s', role, chat_id)
         await message.reply_text(f'{name} 响应超时，请稍后重试。')
@@ -259,11 +306,25 @@ def is_codex_owner(update: Update) -> bool:
     return owner is not None and update.effective_user is not None and update.effective_user.id == owner
 
 
-def bind_window_open() -> bool:
+BIND_MAX_TRIES = 5   # 绑定码输错这么多次就关闭窗口，防止猜码
+
+
+def bind_window_code() -> Optional[str]:
+    """窗口开着时返回绑定码；没开、过期或是旧格式（只有到期时间、没有码）都当关闭。"""
     try:
-        return time.time() < float(BIND_WINDOW_FILE.read_text().strip())
+        data = json.loads(BIND_WINDOW_FILE.read_text())
     except (OSError, ValueError):
-        return False
+        return None
+    if not isinstance(data, dict):
+        return None   # 旧格式：文件里只有一个到期时间
+    code, expires = data.get('code'), data.get('expires')
+    if not isinstance(code, str) or not re.fullmatch(r'[0-9]{6}', code) or not isinstance(expires, (int, float)):
+        return None
+    return code if time.time() < expires else None
+
+
+def bind_window_open() -> bool:
+    return bind_window_code() is not None
 
 
 async def handle_codexbind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -273,8 +334,18 @@ async def handle_codexbind(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if codex_owner() is not None:
         await message.reply_text('Codex 已绑定主人。如需更换，请在手机上重新开放绑定。')
         return
-    if not bind_window_open():
-        await message.reply_text('现在不能绑定。请在手机 Termux 运行 bash ~/ai-codex/scripts/codex_bind_window.sh 后 30 分钟内再发。')
+    code = bind_window_code()
+    given = strip_command(message.text or '')
+    if code is None or not secrets.compare_digest(given.encode(), code.encode()):
+        if code is not None:
+            tries = context.bot_data['bind_tries'] = context.bot_data.get('bind_tries', 0) + 1
+            if tries >= BIND_MAX_TRIES:
+                BIND_WINDOW_FILE.unlink(missing_ok=True)
+                context.bot_data['bind_tries'] = 0
+            log.warning('codex_bind_rejected chat=%s', message.chat_id)
+        # 码不对和窗口没开回同样的话，不透露窗口是否开着
+        await message.reply_text('现在不能绑定。请在手机上点“开放 Codex 绑定”（或运行 bash ~/ai-codex/scripts/codex_bind_window.sh），'
+                                 '30 分钟内发送 /codexbind 加上显示的 6 位绑定码。')
         return
     old = os.umask(0o077)
     try:
@@ -282,6 +353,7 @@ async def handle_codexbind(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     finally:
         os.umask(old)
     BIND_WINDOW_FILE.unlink(missing_ok=True)
+    context.bot_data['bind_tries'] = 0
     log.info('codex_bound chat=%s', message.chat_id)
     await message.reply_text('已绑定：以后只有你能使用这个 Codex 机器人（消耗你的 ChatGPT 订阅额度）。')
 
@@ -327,7 +399,7 @@ async def _run_codex(message, council, text: str, image: Optional[Image]) -> Non
     now = time.monotonic()
     log.info('codex_request chat=%s message=%s kind=%s', chat_id, message.message_id, 'image' if image else 'text')
     try:
-        reply = await council.respond(chat_id, text, image)
+        reply = await council.respond(chat_id, text, image, allow_tools=True)   # 只有主人能走到这里
     except CodexBusy:
         await message.reply_text('Codex 还在处理上一个问题，请稍后再发。')
         return
@@ -452,8 +524,13 @@ def make_discussion(context, chat_id: int, codex_token: str, claude_cfg, names: 
     codex_bot = Bot(codex_token)
     bots = [codex_bot]
 
+    # 讨论只能由主人发起，所以给 GitHub/搜索工具；但讨论发言一律不给 Notion 工具
     async def ask_deepseek(prompt):
-        return await asyncio.wait_for(context.bot_data['council'].agent.respond(prompt), REQUEST_TIMEOUT * 3)
+        return await asyncio.wait_for(context.bot_data['council'].agent.respond(prompt, allow_tools=True, notion=''),
+                                      REQUEST_TIMEOUT * 3)
+
+    async def ask_codex(prompt):
+        return await codex_agent.respond(prompt, allow_tools=True)
 
     async def post_deepseek(text):
         await context.bot.send_message(chat_id, limit_reply(text), parse_mode=None)
@@ -467,7 +544,7 @@ def make_discussion(context, chat_id: int, codex_token: str, claude_cfg, names: 
                  chat_id, u.get('prompt_tokens', 0), u.get('completion_tokens', 0), u.get('prompt_cache_hit_tokens', 0))
 
     # Codex 的发言（含总结）记进 Codex 实例自己的日志，AI 中枢才能数到它在讨论里的发言
-    codex = Speaker('Codex', codex_agent.respond, post_codex, lambda u: log_usage_line(CODEX_ROOT, chat_id, u))
+    codex = Speaker('Codex', ask_codex, post_codex, lambda u: log_usage_line(CODEX_ROOT, chat_id, u))
     available = {'DeepSeek': Speaker('DeepSeek', ask_deepseek, post_deepseek, deepseek_usage), 'Codex': codex}
     if claude_cfg is not None:
         claude_agent = ClaudeAgent(claude_cfg, context.bot_data['client'], toolkit=toolkit)
@@ -475,7 +552,7 @@ def make_discussion(context, chat_id: int, codex_token: str, claude_cfg, names: 
         bots.append(claude_bot)
 
         async def ask_claude(prompt):
-            return await asyncio.wait_for(claude_agent.respond(prompt), REQUEST_TIMEOUT * 3)
+            return await asyncio.wait_for(claude_agent.respond(prompt, allow_tools=True), REQUEST_TIMEOUT * 3)
 
         async def post_claude(text):
             await claude_bot.send_message(chat_id, limit_reply(text), parse_mode=None)
@@ -617,7 +694,7 @@ async def _run_code(message, coder, task: str) -> None:
     elif result.pushed:
         tail = f'改动已推到分支 {result.branch}：\n{result.stat}\n对比 / 开 PR：{result.url}'
     else:
-        tail = f'改动已提交在手机工作区分支 {result.branch}，但推送失败（网络？）：\n{result.stat}'
+        tail = f'推送分支 {result.branch} 失败（网络？），改动没有上传：\n{result.stat}\n手机工作区里还留着改过的文件，下次 /code 前会清掉。'
     if result.outside:
         tail += '\n\n⚠️ 仓库以外有文件在任务期间被改动，请留意：\n' + '\n'.join(result.outside)
     await message.reply_text(limit_reply(f'{result.summary}\n\n{tail}'), parse_mode=None)

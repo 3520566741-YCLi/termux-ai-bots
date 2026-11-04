@@ -10,6 +10,7 @@ import httpx
 from agents.base import Image, Reply
 from agents.deepseek.client import DeepSeekAgent
 from config import Config, MAX_REPLY_UNITS, limit_reply, load_config
+from gateway.telegram import bot
 from gateway.telegram.bot import handle_new, handle_photo, handle_text, image_mime
 from orchestrator.council import Council
 
@@ -17,9 +18,17 @@ CONFIG = Config('test-token', 'test-key', frozenset({-123}), 'https://api.deepse
 
 
 class Tests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # 这些测试以主人身份提问（用户 1 是主人）；非主人的行为见 test_owner.py
+        self.owner = patch.object(bot, 'codex_owner', lambda: 1)
+        self.owner.start()
+
+    def tearDown(self):
+        self.owner.stop()
+
     def message(self, text, chat=-123):
         message = SimpleNamespace(text=text, chat_id=chat, message_id=7, reply_text=AsyncMock())
-        update = SimpleNamespace(message=message, effective_user=SimpleNamespace(is_bot=False))
+        update = SimpleNamespace(message=message, effective_user=SimpleNamespace(is_bot=False, id=1))
         agent = SimpleNamespace(respond=AsyncMock(return_value=Reply('回答', {'prompt_tokens': 10, 'completion_tokens': 5})))
         context = SimpleNamespace(bot_data={'config': CONFIG, 'last_request': {}, 'council': Council(agent)})
         return update, context, agent
@@ -33,7 +42,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
     async def test_valid_command(self):
         update, context, agent = self.message('/ask@testbot 你好')
         await handle_text(update, context)
-        agent.respond.assert_awaited_once_with('你好', (), None)
+        agent.respond.assert_awaited_once_with('你好', (), None, allow_tools=True, notion='read')
         update.message.reply_text.assert_awaited_once_with('回答', parse_mode=None)
 
     async def test_limit_and_cooldown(self):
@@ -96,7 +105,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         agent = SimpleNamespace(respond=AsyncMock(return_value=Reply('答' * 5000)))
         council = Council(agent, clock=lambda: now[0])
         for i in range(5):
-            await council.respond(1, f'问{i}')
+            await council.respond(1, f'问{i}', allow_tools=True)
         history = council.history(1)
         self.assertLessEqual(len(history), 20)
         self.assertLessEqual(sum(len(m['content']) for m in history), 16000)
@@ -109,7 +118,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = Path(tmp) / 'm' / 'deepseek.json'
             agent = SimpleNamespace(respond=AsyncMock(return_value=Reply('答')))
-            await Council(agent, store=store).respond(5, '记住我叫小王')
+            await Council(agent, store=store).respond(5, '记住我叫小王', allow_tools=True)
             self.assertEqual(oct(store.stat().st_mode & 0o777), '0o600')
             again = Council(agent, store=store)          # 模拟机器人重启
             self.assertEqual(again.history(5)[0]['content'], '记住我叫小王')

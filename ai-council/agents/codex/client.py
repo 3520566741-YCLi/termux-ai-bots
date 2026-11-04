@@ -1,7 +1,8 @@
 """用手机上已登录 ChatGPT 的 Codex 命令行（codex exec）回答问题，消耗订阅额度而非 API 余额。
 
-隔离：只读沙箱、空工作目录、不保存会话（--ephemeral）；通过 proot 把机器人 .env、~/.ssh、
-AI 中枢配置挂成空，避免被读出。Codex 自己的登录文件无法屏蔽（它启动时需要），所以只允许主人使用。
+隔离：只读沙箱、空工作目录、不保存会话（--ephemeral）；通过 proot 把三个机器人实例的 .env 和对话记忆、
+~/.ssh、AI 中枢配置、共用工具密钥目录、手机文件工作副本挂成空（见 hidden_binds），避免被读出。
+Codex 自己的登录文件无法屏蔽（它启动时需要），所以只允许主人使用。
 """
 import asyncio
 import contextlib
@@ -15,7 +16,7 @@ from typing import Optional, Sequence
 from agents.base import Image, Reply
 from agents.tool_gateway import ToolGateway
 from agents.tools import TOOLS_ENV, Toolkit
-from config import CODEX_TIMEOUT, ROOT
+from config import CLAUDE_ROOT, CODEX_ROOT, CODEX_TIMEOUT, ROOT
 
 HOME = Path(os.environ.get('HOME', str(Path.home())))
 PREFIX = Path(os.environ.get('PREFIX', '/data/data/com.termux/files/usr'))
@@ -29,6 +30,42 @@ EXT = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/we
 
 class CodexBusy(Exception):
     pass
+
+
+def _unique(paths) -> list:
+    out, seen = [], set()
+    for path in paths:
+        key = os.path.realpath(path)
+        if key not in seen:
+            seen.add(key)
+            out.append(Path(key))
+    return out
+
+
+def files_work_dir() -> Path:
+    """主人文件的 git 工作副本（~/codex-work/files），与 agents/files.py 的 FileStore.work_dir 一致。"""
+    from agents.codex.coder import load_code_config   # 避免循环导入
+    cfg = load_code_config()
+    return (Path(cfg['dir']).parent if cfg else HOME / 'codex-work') / 'files'
+
+
+def hidden_binds(empty: Path, files_dir: Optional[Path] = None) -> list:
+    """proot 参数：把不该让 Codex 看到的东西挂成空。路径都从配置常量算，不写死主目录。
+
+    - 三个实例（含 ~/ai-council）的 .env → /dev/null；各自的 memory_store/ → 空目录
+    - ~/.ssh（推送密钥）、~/.config/ai-hub（控制台 token）、共用工具密钥目录（TOOLS_ENV.parent）→ 空目录
+    - 主人文件工作副本（~/codex-work/files，可推送到 GitHub）→ 空目录
+    - resolv.conf 照旧挂进来，否则 proot 里解析不了域名
+    """
+    instances = _unique([ROOT, HOME / 'ai-council', CODEX_ROOT, CLAUDE_ROOT])
+    binds = ['-b', f'{PREFIX}/etc/resolv.conf:/etc/resolv.conf']
+    for env in _unique(root / '.env' for root in instances):
+        binds += ['-b', f'/dev/null:{env}']
+    dirs = [root / 'memory_store' for root in instances]
+    dirs += [HOME / '.ssh', HOME / '.config/ai-hub', TOOLS_ENV.parent, files_dir or files_work_dir()]
+    for path in _unique(dirs):
+        binds += ['-b', f'{empty}:{path}']
+    return binds
 
 
 class CodexAgent:
@@ -45,6 +82,7 @@ class CodexAgent:
         mcp = []
         if gateway is not None:
             # GitHub 只读工具：MCP 小服务只拿到本机通道的端口和一次性口令，拿不到令牌
+            # 口令放在 -c 参数里，ps 能看到；它只能调用本机通道上的 GitHub 只读查询、且答完即失效，可以接受
             mcp = ['-c', f'mcp_servers.repo.command="{sys.executable}"',
                    '-c', f'mcp_servers.repo.args=["{MCP_SCRIPT}"]',
                    '-c', f'mcp_servers.repo.env={{AI_TOOLS_PORT="{gateway.port}",AI_TOOLS_SECRET="{gateway.secret}"}}',
@@ -61,14 +99,11 @@ class CodexAgent:
             return args
         empty = workdir / '.hidden'
         empty.mkdir(exist_ok=True)
-        binds = ['-b', f'{PREFIX}/etc/resolv.conf:/etc/resolv.conf',
-                 '-b', f'/dev/null:{ROOT / ".env"}',
-                 '-b', f'{empty}:{HOME / ".ssh"}',
-                 '-b', f'{empty}:{HOME / ".config/ai-hub"}',
-                 '-b', f'{empty}:{TOOLS_ENV.parent}']
-        return ['proot', *binds, *args]
+        return ['proot', *hidden_binds(empty), *args]
 
-    async def respond(self, text: str, history: Sequence[dict] = (), image: Optional[Image] = None) -> Reply:
+    async def respond(self, text: str, history: Sequence[dict] = (), image: Optional[Image] = None,
+                      allow_tools: bool = False, notion: str = '') -> Reply:
+        """allow_tools：是否给 GitHub 只读工具（只有主人才给；Codex 机器人本身只为主人服务）。notion 不适用于 Codex。"""
         if self.lock.locked():
             raise CodexBusy()
         async with self.lock:
@@ -80,7 +115,7 @@ class CodexAgent:
                     image_path = workdir / ('input' + EXT.get(image.mime, '.img'))
                     image_path.write_bytes(image.data)
                 context = ''.join(f"\n{'问' if m['role'] == 'user' else '答'}：{m['content']}" for m in history)
-                use_tools = bool(self.toolkit and self.toolkit.names(web=False))
+                use_tools = bool(allow_tools and self.toolkit and self.toolkit.names(web=False))
                 prompt = (INSTRUCTIONS + (REPO_HINT if use_tools else '')
                           + (f'\n\n最近的对话：{context}' if context else '') + f'\n\n问题：{text}')
                 env = dict(os.environ, CODEX_CA_CERTIFICATE=str(PREFIX / 'etc/tls/cert.pem'), NO_COLOR='1',

@@ -101,13 +101,15 @@ class NotionTest(unittest.IsolatedAsyncioTestCase):
         kit = self.kit()
         self.assertNotIn('notion_search', kit.names())               # 默认不给（只给 DeepSeek）
         self.assertIn('notion_create_page', kit.names(notion=True))
+        self.assertIn('notion_create_page', kit.names(notion='write'))
+        self.assertEqual([n for n in kit.names(notion='read') if n.startswith('notion_')], ['notion_search', 'notion_read_page'])
         self.assertIn(PAGE_ID, await kit.call('notion_search', {'query': '笔记'}))
         self.assertEqual(await kit.call('notion_read_page', {'page': PAGE}), '# AI 笔记\n第一段\n- 要点')
         out = await kit.call('notion_create_page', {'title': '学习计划', 'content': '# 目标\n- 每天 30 分钟\n1. 先学 Python\n[] 买书\n普通一段 **重点**'})
         self.assertIn('https://notion.so/new', out)
         method, path, body = self.calls[-1]
         self.assertEqual((method, path), ('POST', '/v1/pages'))
-        self.assertEqual(body['parent'], {'page_id': PAGE_ID})          # 默认父页面来自链接
+        self.assertEqual(body['parent'], {'page_id': PAGE_ID})          # 父页面固定来自 NOTION_PARENT_PAGE_ID
         kinds = [b['type'] for b in body['children']]
         self.assertEqual(kinds, ['heading_1', 'bulleted_list_item', 'numbered_list_item', 'to_do', 'paragraph'])
         self.assertEqual(body['children'][-1]['paragraph']['rich_text'][0]['text']['content'], '普通一段 重点')
@@ -143,7 +145,7 @@ class LoopTest(unittest.IsolatedAsyncioTestCase):
             return github_handler(request)
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         cfg = Config('t', 'k', frozenset({-1}), 'https://api.deepseek.com', 'deepseek-flash')
-        reply = await DeepSeekAgent(cfg, client, Toolkit(client, values=KEYS)).respond('我有哪些仓库')
+        reply = await DeepSeekAgent(cfg, client, Toolkit(client, values=KEYS)).respond('我有哪些仓库', allow_tools=True)
         self.assertEqual(reply.text, '你有 me/app。')
         self.assertEqual(reply.usage['prompt_tokens'], 40)
 
@@ -162,7 +164,7 @@ class LoopTest(unittest.IsolatedAsyncioTestCase):
                                              'usage': {}})
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         cfg = Config('t', 'k', frozenset({-1}), 'https://api.deepseek.com', 'deepseek-flash')
-        reply = await DeepSeekAgent(cfg, client, Toolkit(client, values=KEYS)).respond('看看仓库')
+        reply = await DeepSeekAgent(cfg, client, Toolkit(client, values=KEYS)).respond('看看仓库', allow_tools=True)
         self.assertEqual(reply.text, '根据已查到的信息：先做 A。')
         self.assertEqual(len(sent), 2)
 
@@ -188,7 +190,7 @@ class LoopTest(unittest.IsolatedAsyncioTestCase):
             return github_handler(request)
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         cfg = Config('t', 'sk-ant', frozenset({-1}), CLAUDE_API, CLAUDE_MODEL, 'claude')
-        reply = await ClaudeAgent(cfg, client, toolkit=Toolkit(client, values=KEYS)).respond('看看 README')
+        reply = await ClaudeAgent(cfg, client, toolkit=Toolkit(client, values=KEYS)).respond('看看 README', allow_tools=True)
         self.assertEqual(reply.text, 'README 写着你好')
         self.assertIn('GitHub', sent[0]['system'])
 

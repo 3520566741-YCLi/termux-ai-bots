@@ -1,15 +1,19 @@
 """一次性接收 Telegram 机器人 token 或 Claude API key，写入本实例 .env（600）。
 密钥只走 USB 端口转发，不出现在屏幕、日志或聊天里。
 
-手机（Termux，实例目录里）：
-  AI_BOT_ROOT=$PWD .venv/bin/python scripts/receive_bot_token.py --role claude --copy-chats ~/ai-council/.env
-  AI_BOT_ROOT=$PWD .venv/bin/python scripts/receive_bot_token.py --role claude --field ANTHROPIC_API_KEY
-电脑：adb forward tcp:38421 tcp:38421，然后用隐藏输入把密钥发到 127.0.0.1:38421（见 docs/SETUP.md 附录）。
-在手机上直接输入更简单：scripts/set_secret.py。
+手机（Termux，实例目录里）：先在电脑上生成一次性 nonce（openssl rand -hex 16），两边用同一个：
+  AI_BOT_ROOT=$PWD .venv/bin/python scripts/receive_bot_token.py --role claude --nonce <nonce> --copy-chats ~/ai-council/.env
+  AI_BOT_ROOT=$PWD .venv/bin/python scripts/receive_bot_token.py --role claude --nonce <nonce> --field ANTHROPIC_API_KEY
+电脑：adb forward tcp:38421 tcp:38421，然后在 zsh 里隐藏输入、把“nonce 空格 密钥”作为一行发过去（见 docs/SETUP.md 附录）：
+  read -rs "T?粘贴密钥后回车：" && printf '%s %s\n' <nonce> "$T" | nc 127.0.0.1 38421; unset T
+在手机上直接输入更简单：scripts/set_secret.py（不走网络，不需要 nonce）。
 只监听 127.0.0.1，10 分钟无连接自动退出，收到一次即退出。
+nonce 不对、或收到的是 HTTP 请求（GET/POST… 开头，比如网页里的脚本往 127.0.0.1:38421 发请求）时一律拒绝、什么都不保存：
+防止电脑上打开的网页抢先把别人的 token 塞进来。
 """
 import argparse
 import asyncio
+import hmac
 import os
 import re
 import socket
@@ -31,6 +35,19 @@ FIELDS = {
     'NOTION_TOKEN': re.compile(r'(?<![A-Za-z0-9_])(?:ntn|secret)_[A-Za-z0-9]{30,80}(?![A-Za-z0-9_])'),
 }
 PASTE_MARK_RE = re.compile(r'\x1b\[20[01]~')
+NONCE_RE = re.compile(r'^[0-9a-fA-F]{16,128}$')
+HTTP_RE = re.compile(r'^\s*(GET|POST|PUT|HEAD|OPTIONS|DELETE|PATCH|CONNECT|TRACE)\b', re.I)
+
+
+def check_payload(nonce: str, raw: str):
+    """收到的应是一行“nonce 密钥”。nonce 对得上才返回密钥部分，否则返回 None。"""
+    text = PASTE_MARK_RE.sub('', raw)
+    if HTTP_RE.match(text):
+        return None
+    first, _, rest = text.lstrip().partition(' ')
+    if not hmac.compare_digest(first.strip().lower().encode(), nonce.lower().encode()):
+        return None
+    return rest
 
 
 def extract(field: str, raw: str):
@@ -88,7 +105,10 @@ def main() -> int:
     parser.add_argument('--role', choices=['deepseek', 'codex', 'claude'], required=True)
     parser.add_argument('--field', choices=list(FIELDS), default='TELEGRAM_BOT_TOKEN')
     parser.add_argument('--copy-chats', help='从另一个实例的 .env 复制 ALLOWED_CHAT_IDS')
+    parser.add_argument('--nonce', required=True, help='一次性随机十六进制串（电脑上 openssl rand -hex 16），发送方要放在密钥前面')
     args = parser.parse_args()
+    if not NONCE_RE.match(args.nonce):
+        parser.error('--nonce 必须是 16–128 位十六进制字符')
     env = ROOT / '.env'
     old = os.umask(0o077)
     try:
@@ -110,7 +130,12 @@ def main() -> int:
     with conn:
         conn.settimeout(30)
         raw = conn.recv(1024).decode('utf-8', 'ignore')
-        token = extract(args.field, raw)
+        secret = check_payload(args.nonce, raw)
+        if secret is None:
+            conn.sendall('nonce 不对或不是预期的发送命令，没有保存。请重新运行。\n'.encode())
+            print(f'收到的内容没有正确的 nonce，未保存（{len(raw.strip())} 个字符）。')
+            return 1
+        token = extract(args.field, secret)
         if not token:
             conn.sendall('格式不对，没有保存。请重新运行。\n'.encode())
             # 只记长度和有没有控制符，不记内容

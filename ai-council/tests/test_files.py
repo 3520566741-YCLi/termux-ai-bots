@@ -76,7 +76,8 @@ class FilesTest(unittest.IsolatedAsyncioTestCase):
         codex = Path(self.tmp.name) / 'codex'
         codex.write_text(FAKE)
         codex.chmod(codex.stat().st_mode | stat.S_IEXEC)
-        result = await CodexCoder(codex, use_proot=False, config=self.cfg).run('看看文件')
+        # 事后检查只看临时目录，不去遍历真实主目录（很慢）
+        result = await CodexCoder(codex, use_proot=False, config=self.cfg, watch_root=Path(self.tmp.name)).run('看看文件')
         self.assertTrue(result.pushed)
         seen = git('show', f'{result.branch}:seen.txt', cwd=self.origin)
         self.assertIn(saved.path.split('/')[0], seen)       # 日期目录可见

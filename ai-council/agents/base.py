@@ -16,4 +16,7 @@ class Image:
 
 
 class Agent(Protocol):
-    async def respond(self, text: str, history: Sequence[dict] = (), image: Optional[Image] = None) -> Reply: ...
+    # allow_tools：这次请求能不能用工具（GitHub、搜索、Notion），只有主人才给；默认不给。
+    # notion：''（不给）/'read'（查看）/'write'（查看+保存），只对 DeepSeek 有意义。
+    async def respond(self, text: str, history: Sequence[dict] = (), image: Optional[Image] = None,
+                      allow_tools: bool = False, notion: str = '') -> Reply: ...

@@ -15,11 +15,14 @@
 AI 清单在 ~/.config/ai-hub/bots.json，字段说明见同目录 ADDING_AI.md。
 """
 import fcntl
+import hashlib
+import hmac
 import json
 import os
 import re
 import secrets
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -529,8 +532,12 @@ def storage_status(force=False):
     return data
 
 
+# 每次调用 git 都关掉钩子和 fsmonitor：文件目录可能被 /code 里的 Codex 动过，不能让它埋下的钩子在这里执行
+GIT_SAFE = ('-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false')
+
+
 def _git(args, cwd, timeout=300):
-    return subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True, timeout=timeout,
+    return subprocess.run(['git', *GIT_SAFE, *args], cwd=cwd, capture_output=True, text=True, timeout=timeout,
                           env=dict(os.environ, GIT_TERMINAL_PROMPT='0'))
 
 
@@ -789,15 +796,38 @@ def act(bot_id, action):
 
 # ---------- 网页控制台 ----------
 
-def token():
+def _write_token(value):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = TOKEN_FILE.with_name(TOKEN_FILE.name + '.tmp')
+    old = os.umask(0o077)
+    try:
+        tmp.unlink(missing_ok=True)
+        tmp.write_text(value)
+        os.chmod(tmp, 0o600)
+        tmp.replace(TOKEN_FILE)
+    finally:
+        os.umask(old)
+
+
+def token():
     if not TOKEN_FILE.exists():
-        old = os.umask(0o077)
-        try:
-            TOKEN_FILE.write_text(secrets.token_urlsafe(24))
-        finally:
-            os.umask(old)
+        _write_token(secrets.token_urlsafe(24))
     return TOKEN_FILE.read_text().strip()
+
+
+def rotate_token():
+    """控制台每次启动都换新 token（权限 600），旧链接、被别人看到过的 token 随之失效。"""
+    value = secrets.token_urlsafe(24)
+    _write_token(value)
+    return value
+
+
+HEX_RE = re.compile(r'^[0-9a-f]{32,128}$')
+
+
+def hello_mac(secret, challenge):
+    """控制台身份证明：HMAC-SHA256(token, challenge)。证明对方知道 token，但不泄露 token 本身。"""
+    return hmac.new(secret.encode(), bytes.fromhex(challenge), hashlib.sha256).hexdigest()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -827,7 +857,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         Handler.last_seen = time.monotonic()
-        path = self.path.split('?')[0]
+        path, _, query = self.path.partition('?')
+        if path == '/api/hello':
+            # 不需要 token：只返回对随机挑战的 HMAC，供 open_ui 确认 8765 端口上真的是自己的控制台
+            challenge = dict(p.partition('=')[::2] for p in query.split('&')).get('c', '').lower()
+            if not HEX_RE.match(challenge):
+                return self._send(400, {'error': 'bad challenge'})
+            return self._send(200, {'mac': hello_mac(token(), challenge)})
         if path in ('/', '/index.html'):
             return self._send(200, (WEB_DIR / 'index.html').read_bytes(), 'text/html; charset=utf-8')
         if path in ('/app.js', '/app.css'):
@@ -899,9 +935,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve():
-    token()
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server = ThreadingHTTPServer((HOST, PORT), Handler)   # 先占端口：端口被占时不会改写正在用的 token
+    rotate_token()                                         # 开始服务前写好新 token（600）
     (STATE_DIR / 'server.pid').write_text(str(os.getpid()))
 
     def idle_watch():
@@ -917,13 +953,35 @@ def serve():
         (STATE_DIR / 'server.pid').unlink(missing_ok=True)
 
 
-def server_alive():
-    import urllib.request
+PORT_TAKEN = (f'端口 {PORT} 被其他程序占用（不是 AI 中枢控制台），为安全起见没有打开浏览器。'
+              '请在 Termux 用 `ss -ltnp` 或重启手机找出并关掉占用端口的程序后再试。')
+
+
+def server_identity():
+    """'ok'：端口上是自己的控制台（HMAC 验证通过）；'down'：没有程序在听；'other'：被别的程序占用。"""
+    challenge = secrets.token_hex(16)
     try:
-        with urllib.request.urlopen(f'http://{HOST}:{PORT}/index.html', timeout=1) as r:
-            return r.status == 200
+        with urllib.request.urlopen(f'http://{HOST}:{PORT}/api/hello?c={challenge}', timeout=1) as r:
+            body = json.loads(r.read(4096) or b'{}')
+    except urllib.error.HTTPError:
+        return 'other'
+    except (OSError, ValueError):
+        # 连不上算没启动；连上了但回的不是 JSON 也算别的程序
+        try:
+            with socket.create_connection((HOST, PORT), timeout=0.5):
+                return 'other'
+        except OSError:
+            return 'down'
+    try:
+        expected = hello_mac(TOKEN_FILE.read_text().strip(), challenge)
     except OSError:
-        return False
+        return 'other'
+    mac = body.get('mac') if isinstance(body, dict) else None
+    return 'ok' if isinstance(mac, str) and hmac.compare_digest(mac, expected) else 'other'
+
+
+def server_alive():
+    return server_identity() == 'ok'
 
 
 def open_ui():
@@ -931,7 +989,7 @@ def open_ui():
         ensure()
     except (OSError, ValueError) as error:
         note(f'ensure_error type={type(error).__name__}')
-    if not server_alive():
+    if server_identity() == 'down':
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         with (STATE_DIR / 'server.log').open('a') as log:
             subprocess.Popen([sys.executable, os.path.abspath(__file__), 'serve'],
@@ -941,10 +999,16 @@ def open_ui():
             if server_alive():
                 break
             time.sleep(0.1)
+    # 交出 token 之前必须确认端口上是自己的控制台，否则 token 会落到占用端口的程序手里
+    if not server_alive():
+        print(PORT_TAKEN if server_identity() == 'other' else '控制台没能启动，请查看 ~/.cache/ai-hub/server.log。')
+        note('open_refused port_check_failed')
+        return False
     # token 放在 # 后面：不会发给服务器，页面读取后立即从地址栏抹掉。
-    url = f'http://{HOST}:{PORT}/#{token()}'
+    url = f'http://{HOST}:{PORT}/#{TOKEN_FILE.read_text().strip()}'
     subprocess.run(['am', 'start', '-a', 'android.intent.action.VIEW', '-d', url],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
 
 
 def menu():
@@ -989,8 +1053,7 @@ def main(argv):
         serve()
         return 0
     if cmd == 'open':
-        open_ui()
-        return 0
+        return 0 if open_ui() else 1
     if cmd == 'menu':
         menu()
         return 0

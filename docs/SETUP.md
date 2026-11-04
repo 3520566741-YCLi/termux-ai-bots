@@ -169,6 +169,8 @@ Optional — let Android restart the watchdog every 15 minutes even if Termux wa
 termux-job-scheduler --job-id 4242 --period-ms 900000 --script ~/.local/share/ai-hub/ensure.sh
 ```
 
+The console creates a new random access token (file mode 600) every time it starts, so an old console link stops working after a restart. Before `ai-hub open` hands the token to the browser, it checks that the program on port 8765 really is this console (it asks for an HMAC of a random challenge); if another program holds the port, the browser is not opened and you get a warning.
+
 **Check:** `ai-hub status` lists `deepseek`, `codex`, `claude` as stopped. Long-press the home screen → Widgets → Termux:Widget → add, tap **AI-Bots**: the console opens in the browser.
 
 ## 9. Install and log in to the Codex CLI
@@ -218,7 +220,7 @@ All four values go to `~/.config/ai-tools/.env` (directory 700, file 600) — `s
 
 - **GitHub** — <https://github.com/settings/personal-access-tokens> → fine-grained token → Repository access: **All repositories** → Permissions: **Contents: Read-only** (Metadata read-only is added automatically). Nothing else.
 - **Tavily** (DeepSeek's web search) — key from <https://app.tavily.com>.
-- **Notion** (DeepSeek only) — <https://www.notion.so/profile/integrations> → new **internal** connection → capabilities **Read content, Update content, Insert content** (user information: none or without email). In the connection's **Content access** tab, pick the pages it may see. Create a page for saved notes (e.g. "AI Notes") and include it; its ID is the 32 hex characters at the end of its link — you can paste the whole link.
+- **Notion** (DeepSeek only) — <https://www.notion.so/profile/integrations> → new **internal** connection → capabilities **Read content, Update content, Insert content** (user information: none or without email). In the connection's **Content access** tab, pick the pages it may see. Create a page for saved notes (e.g. "AI Notes") and include it; its ID is the 32 hex characters at the end of its link — you can paste the whole link. DeepSeek gets Notion write tools only when **the owner's** message has a save intent ("save", "保存", "记到", "整理到", "Notion", "笔记" …); new pages are always created under `NOTION_PARENT_PAGE_ID`, appends only go to that page or its direct children, and nothing is ever deleted or rewritten.
 
 ```bash
 $S --field GITHUB_TOKEN
@@ -250,13 +252,13 @@ It shows the role, model, configured `tools=` and `sees_all_group_messages` (`Tr
 
 ## 12. Bind the Codex owner
 
-Codex runs on your subscription and can read files on the phone, so only one Telegram user (you) may use it. Discussions also require this binding.
+Codex runs on your subscription and can read files on the phone, so only one Telegram user (you) may use it. Discussions also require this binding, and the same owner is the only user who gets tools and memory from DeepSeek and Claude.
 
 ```bash
 bash ~/ai-codex/scripts/codex_bind_window.sh
 ```
 
-(or tap **开放 Codex 绑定（30 分钟）** on the Codex card in the console). Within 30 minutes, send `/codexbind@example_codex_bot` in the group.
+(or tap **开放 Codex 绑定（30 分钟）** on the Codex card in the console). The script (or button) prints a one-time **6-digit code**. Within 30 minutes, send `/codexbind@example_codex_bot <code>` in the group (in a private chat `/codexbind <code>` is enough). A wrong code does not bind, 5 wrong codes close the window, and the code is void once binding succeeds.
 
 **Check:** `~/ai-codex/codex_owner.json` exists, and the bot replied "已绑定". To change the owner later, delete that file and repeat.
 
@@ -272,6 +274,8 @@ bash ~/ai-codex/scripts/codex_bind_window.sh
 ## 14. Optional: `/code` and saving files to GitHub (Codex)
 
 `/code <task>` lets Codex edit a copy of one of your repositories on the phone, commit, and push a new `codex/<time>` branch (never `main`). Files you send to the Codex bot are stored on a `files` branch of the same repo.
+
+> **`/code` is full code execution on the phone.** Treat every task — and everything Codex reads while working (repository content, files under `_files/`) — as code running as your Termux user. Only the bound owner can start it.
 
 1. Create an SSH key for the phone and add it to that repository as a **deploy key with write access**:
 
@@ -289,7 +293,17 @@ bash ~/ai-codex/scripts/codex_bind_window.sh
 
 3. For file saving, create an empty `files` branch once (e.g. `git switch --orphan files && git commit --allow-empty -m files && git push origin files`).
 
-Android without root has no user namespaces, so Codex runs `/code` with `danger-full-access`; the bot hides secrets with proot, scans the diff for secret-like strings before pushing, and reports files changed outside the repo. This is a guard rail, not isolation.
+4. **Recommended:** protect `main` on GitHub (repo → Settings → Rules / Branches: require a pull request, block force pushes, and do not let deploy keys bypass the rule) so the phone's deploy key can only push `codex/*` branches (and `files`), even if the phone is compromised.
+
+Android without root has no user namespaces, so Codex runs `/code` with `danger-full-access`. Mitigations:
+
+- Every task starts from a **fresh clone** of `origin/main` (the old work directory is deleted), so hooks or git config planted by an earlier task do not survive.
+- After Codex finishes, the bot never runs git in the directory Codex touched: it copies the files into a separate clean clone (skipping `.git` and `_files/`, copying symlinks as links without following them, skipping FIFOs/devices), scans the diff for secret-like strings, commits and pushes only the `codex/<time>` branch.
+- Every git command of the bot and the console runs with `-c core.hooksPath=/dev/null -c core.fsmonitor=false`, so **git hooks and fsmonitor are disabled**.
+- **Secrets are hidden via proot**: the three instances' `.env` and `memory_store/`, `~/.ssh` (Codex never sees the push key), `~/.config/ai-hub`, `~/.config/ai-tools` and `~/codex-work/files` are mounted empty. If `proot` is missing, `/code` refuses to run.
+- Files changed in your home directory outside the repo are reported in the reply.
+
+Remaining risks: this is not isolation. Codex can still reach the network, start background processes, modify any file that proot does not hide (including the bot's own code, `~/.bashrc`, `~/.gitconfig`, start scripts), and read its own ChatGPT login file; the after-the-fact scan only warns, it does not block.
 
 **Check:** `/code add a line to README saying hello` → the reply contains a `compare/main...codex/...` link.
 
@@ -297,10 +311,12 @@ Android without root has no user namespaces, so Codex runs `/code` with `danger-
 
 ## Security notes
 
-- Everyone in an allowed chat can use DeepSeek and Claude — including their tools. With a GitHub token configured, **they can read your private repositories through the bot**, and through DeepSeek they can read and add to the Notion pages you shared. Only allow chats you fully trust.
-- Codex is owner-only because it can run commands on the phone and its own login file cannot be hidden from it.
+- **Only the bound owner gets tools and memory.** For the owner, DeepSeek and Claude use GitHub (including private repos), web search and Notion, and remember the conversation. Everyone else in an allowed chat gets plain answers without tools, their questions are not stored in (and cannot see) the memory, and each person is limited to **10 questions per hour** per chat. Still, only allow chats you trust: they spend your API balance.
+- Notion writes happen only when the owner's message asks to save, and always under `NOTION_PARENT_PAGE_ID`.
+- Codex is owner-only because it can run commands on the phone and its own login file cannot be hidden from it. `/code` is full code execution — see step 14 for the mitigations and remaining risks.
+- `/codexbind` needs the 6-digit code printed by `scripts/codex_bind_window.sh`, so someone else in the group cannot claim the bot while the window is open.
 - The bots log only event names and numbers (no message text, no keys). ai-hub additionally redacts chat/user IDs and anything key-like.
-- The console listens on 127.0.0.1 only and requires a random token; it exits after 20 minutes without visits.
+- The console listens on 127.0.0.1 only and requires a random token that is regenerated every time the console starts; before opening the browser it verifies that port 8765 is really served by the console. It exits after 20 minutes without visits.
 - Restarting a bot drops queued Telegram messages on purpose (avoids paying twice).
 
 ## Updating
@@ -333,23 +349,31 @@ install -m 700 ~/ai-bots-src/ai-hub/ai_hub.py ~/.local/bin/ai-hub && cp -r ~/ai-
 
 ## Appendix: send a secret from a computer over adb (optional)
 
-If you prefer typing on a computer, `scripts/receive_bot_token.py` listens once on `127.0.0.1:38421` on the phone (10-minute timeout) and you forward the port over USB.
+If you prefer typing on a computer, `scripts/receive_bot_token.py` listens once on `127.0.0.1:38421` on the phone (10-minute timeout) and you forward the port over USB. It requires a one-time **nonce**: the sender must send `<nonce> <secret>` on one line. A wrong nonce, or anything that looks like an HTTP request (e.g. a web page in your computer's browser posting to `127.0.0.1:38421`), is rejected and nothing is saved.
+
+On the computer, generate the nonce first:
+
+```bash
+openssl rand -hex 16        # e.g. 3f9c…  — use the same value on both sides
+```
 
 Phone (Termux), inside the instance directory:
 
 ```bash
-cd ~/ai-claude && AI_BOT_ROOT=$PWD .venv/bin/python scripts/receive_bot_token.py --role claude --field ANTHROPIC_API_KEY
+cd ~/ai-claude && AI_BOT_ROOT=$PWD .venv/bin/python scripts/receive_bot_token.py --role claude --nonce <nonce> --field ANTHROPIC_API_KEY
 ```
 
-Computer (USB debugging on):
+Computer (USB debugging on), replacing `<nonce>` with the value above:
 
 ```bash
 adb forward tcp:38421 tcp:38421
 # zsh (macOS default) — note the  name?prompt  syntax; `read -p` means something else in zsh:
-read -rs 'k?Secret: '; echo; printf '%s\n' "$k" | nc 127.0.0.1 38421; unset k
+read -rs "T?Paste the secret, then Enter: " && printf '%s %s\n' <nonce> "$T" | nc 127.0.0.1 38421; unset T
 # bash:
-read -rsp 'Secret: ' k; echo; printf '%s\n' "$k" | nc 127.0.0.1 38421; unset k
+read -rsp 'Paste the secret, then Enter: ' T && printf '%s %s\n' <nonce> "$T" | nc 127.0.0.1 38421; unset T
 adb forward --remove tcp:38421
 ```
 
-macOS Terminal wraps pasted text in bracketed-paste markers; the receiver strips them and extracts the key. Shared tool keys go to `~/.config/ai-tools`: run the receiver with `AI_BOT_ROOT=~/.config/ai-tools`, `--role deepseek` (required but unused) and `--field GITHUB_TOKEN` (or `TAVILY_API_KEY`, `NOTION_TOKEN`).
+`scripts/set_secret.py` (typing on the phone) does not use the network and needs no nonce.
+
+macOS Terminal wraps pasted text in bracketed-paste markers; the receiver strips them and extracts the key. Shared tool keys go to `~/.config/ai-tools`: run the receiver with `AI_BOT_ROOT=~/.config/ai-tools`, `--role deepseek` (required but unused), `--nonce <nonce>` and `--field GITHUB_TOKEN` (or `TAVILY_API_KEY`, `NOTION_TOKEN`).

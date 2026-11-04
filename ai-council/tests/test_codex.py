@@ -73,6 +73,12 @@ class CodexAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('--ephemeral', joined)
         self.assertIn('/dev/null:' + str(bot.ROOT / '.env'), joined)
         self.assertIn('.ssh', joined)
+        from agents.codex import client
+        for root in (client.CODEX_ROOT, client.CLAUDE_ROOT, client.HOME / 'ai-council'):
+            self.assertIn('/dev/null:' + os.path.realpath(root / '.env'), joined)
+            self.assertIn(':' + os.path.realpath(root / 'memory_store'), joined)
+        self.assertIn(':' + os.path.realpath(client.files_work_dir()), joined)   # 手机文件工作副本也挂空
+        self.assertIn('/etc/resolv.conf', joined)
         self.assertEqual(cmd[-1], '-')   # 问题走标准输入
 
 
@@ -100,10 +106,10 @@ class CodexHandlerTest(unittest.IsolatedAsyncioTestCase):
         return update, context, agent
 
     async def test_bind_needs_window_then_only_owner_can_use(self):
-        update, context, agent = self.update('/codexbind')
+        update, context, agent = self.update('/codexbind 123456')
         await bot.handle_codexbind(update, context)
         self.assertIn('不能绑定', update.message.reply_text.call_args.args[0])
-        bot.BIND_WINDOW_FILE.write_text(str(time.time() + 60))
+        bot.BIND_WINDOW_FILE.write_text(json.dumps({'code': '123456', 'expires': time.time() + 60}))
         await bot.handle_codexbind(update, context)
         self.assertEqual(json.loads(bot.OWNER_FILE.read_text())['user_id'], 1)
         self.assertFalse(bot.BIND_WINDOW_FILE.exists())
@@ -120,8 +126,8 @@ class CodexHandlerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_rebind_refused_and_other_chat_ignored(self):
         bot.OWNER_FILE.write_text(json.dumps({'user_id': 1}))
-        bot.BIND_WINDOW_FILE.write_text(str(time.time() + 60))
-        update, context, agent = self.update('/codexbind', user=2)
+        bot.BIND_WINDOW_FILE.write_text(json.dumps({'code': '123456', 'expires': time.time() + 60}))
+        update, context, agent = self.update('/codexbind 123456', user=2)
         await bot.handle_codexbind(update, context)
         self.assertEqual(json.loads(bot.OWNER_FILE.read_text())['user_id'], 1)
         update, context, agent = self.update('/codex 问题', user=1, chat=999)
@@ -129,6 +135,39 @@ class CodexHandlerTest(unittest.IsolatedAsyncioTestCase):
         update.message.reply_text.assert_not_called()
 
 
+    async def test_bind_requires_matching_code(self):
+        bot.BIND_WINDOW_FILE.write_text(json.dumps({'code': '654321', 'expires': time.time() + 60}))
+        for text in ('/codexbind', '/codexbind 000000', '/codexbind@bot 65432'):
+            update, context, agent = self.update(text, user=7)
+            await bot.handle_codexbind(update, context)
+            self.assertFalse(bot.OWNER_FILE.exists())
+            reply = update.message.reply_text.call_args.args[0]
+            self.assertNotIn('654321', reply)
+            self.assertIn('不能绑定', reply)          # 码不对和窗口没开回同样的话
+        update, context, agent = self.update('/codexbind@bot 654321', user=1)
+        await bot.handle_codexbind(update, context)
+        self.assertEqual(json.loads(bot.OWNER_FILE.read_text())['user_id'], 1)
+        self.assertFalse(bot.BIND_WINDOW_FILE.exists())   # 用一次就作废
+
+    async def test_bind_expired_old_format_and_brute_force(self):
+        # 旧格式（只有到期时间）当作关闭
+        bot.BIND_WINDOW_FILE.write_text(str(time.time() + 60))
+        update, context, agent = self.update('/codexbind 123456')
+        await bot.handle_codexbind(update, context)
+        self.assertFalse(bot.OWNER_FILE.exists())
+        # 过期
+        bot.BIND_WINDOW_FILE.write_text(json.dumps({'code': '123456', 'expires': time.time() - 1}))
+        await bot.handle_codexbind(update, context)
+        self.assertFalse(bot.OWNER_FILE.exists())
+        # 输错 5 次关闭窗口，之后正确的码也不行
+        bot.BIND_WINDOW_FILE.write_text(json.dumps({'code': '123456', 'expires': time.time() + 60}))
+        for i in range(bot.BIND_MAX_TRIES):
+            wrong, context, agent = self.update(f'/codexbind 00000{i}', user=9)
+            context.bot_data['bind_tries'] = i
+            await bot.handle_codexbind(wrong, context)
+        self.assertFalse(bot.BIND_WINDOW_FILE.exists())
+        await bot.handle_codexbind(update, context)
+        self.assertFalse(bot.OWNER_FILE.exists())
 
 class RoleSplitTest(unittest.IsolatedAsyncioTestCase):
     def commands(self, role):
