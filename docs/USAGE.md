@@ -23,7 +23,7 @@ Replace `example_*_bot` with your bots' usernames.
 - **Web search**: ask for something current ("今天北京天气", "latest Python release") — each bot uses its own search.
 - **GitHub (read-only)**: "list my repositories", "what does README in repo X say", "search my code for `load_config`".
 - **Notion (DeepSeek only)**: "search my Notion for …", "save this to Notion: …", "append these notes to page …". DeepSeek only creates pages and appends; it never deletes or rewrites. It saves under the page set in `NOTION_PARENT_PAGE_ID` unless you name another shared page, and replies with the link.
-  - DeepSeek's memory holds its own Q&A, not the turns of a discussion. To save a discussion, ask DeepSeek to save it and paste (or forward) the summary you want kept.
+  - When a discussion ends, its topic and Codex's combined summary are added to DeepSeek's chat memory (if it was stopped or failed, the turns so far are kept instead), so you can simply say "整理一下刚才的讨论，保存到 Notion".
 
 ## Discussions (owner only, in the group)
 

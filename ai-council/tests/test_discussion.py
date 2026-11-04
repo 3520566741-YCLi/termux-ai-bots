@@ -185,5 +185,23 @@ class HandlerTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('讨论 3轮 话题', update.message.reply_text.call_args.args[0])
 
 
+class MemoryTest(unittest.IsolatedAsyncioTestCase):
+    async def test_discussion_summary_goes_into_deepseek_memory(self):
+        from orchestrator.council import Council
+        council = Council(SimpleNamespace())
+        context = SimpleNamespace(bot_data={'council': council})
+        done = Discussion([], None, turns=[('DeepSeek', '观点甲'), ('Claude', '观点乙')], summary='结论：先做 A。')
+        bot.remember_discussion(context, -1, done, '要不要学编程', 3, 'done')
+        memory = council.history(-1)
+        self.assertIn('要不要学编程', memory[0]['content'])
+        self.assertIn('结论：先做 A。', memory[1]['content'])
+        self.assertIn('DeepSeek、Claude', memory[1]['content'])
+        stopped = Discussion([], None, turns=[('DeepSeek', '只说了一半')])
+        bot.remember_discussion(context, -2, stopped, 't', 3, 'stopped')
+        self.assertIn('只说了一半', council.history(-2)[1]['content'])
+        bot.remember_discussion(context, -3, Discussion([], None), 't', 3, 'error:DeepSeek')
+        self.assertEqual(council.history(-3), [])
+
+
 if __name__ == '__main__':
     unittest.main()

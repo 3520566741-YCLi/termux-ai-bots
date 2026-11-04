@@ -83,6 +83,7 @@ class Discussion:
     summarizer: Speaker       # 做总结的（Codex）
     stopped: bool = False
     turns: list = field(default_factory=list)
+    summary: str = ''
 
     async def run(self, topic: str, rounds: int = DEFAULT_ROUNDS) -> str:
         """返回 'done' / 'stopped' / 'error:<谁>'。"""
@@ -107,6 +108,7 @@ class Discussion:
         except Exception:
             return f'error:{self.summarizer.name}'
         self.summarizer.on_usage(summary.usage)
+        self.summary = plain_text(summary.text)
         await self.summarizer.post(f'【综合总结 · {self.summarizer.name}】\n{plain_text(summary.text)}')
         return 'done'
 

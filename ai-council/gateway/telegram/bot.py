@@ -25,7 +25,8 @@ from agents.deepseek.client import DeepSeekAgent
 from config import (CLAUDE_ROOT, CODEX_BIND_WINDOW, CODEX_ROOT, CODEX_TIMEOUT, DEFAULT_IMAGE_PROMPT,
                     MAX_IMAGE_BYTES, MAX_INPUT_CHARS, MEMORY_DIR, REQUEST_TIMEOUT, ROOT, limit_reply, load_config)
 from orchestrator.council import Council
-from orchestrator.discussion import DEFAULT_ROUNDS, MAX_ROUNDS, PARTICIPANTS, Discussion, Speaker, parse_discuss_args
+from orchestrator.discussion import (DEFAULT_ROUNDS, MAX_ROUNDS, PARTICIPANTS, Discussion, Speaker, parse_discuss_args,
+                                     transcript_text)
 
 log = logging.getLogger('ai_council')
 AGENT_NAMES = {'deepseek': 'DeepSeek', 'claude': 'Claude', 'codex': 'Codex'}
@@ -484,6 +485,19 @@ def make_discussion(context, chat_id: int, codex_token: str, claude_cfg, names: 
     return Discussion([available[n] for n in names if n in available], codex)
 
 
+def remember_discussion(context, chat_id: int, discussion: Discussion, topic: str, rounds: int, result: str) -> None:
+    """讨论结束后把话题和总结记进 DeepSeek 的对话记忆，主人随后可以说“整理一下存到 Notion”。"""
+    council = context.bot_data.get('council')
+    if council is None or not discussion.turns:
+        return
+    names = '、'.join(dict.fromkeys(who for who, _ in discussion.turns))
+    if result == 'done' and discussion.summary:
+        body = f'（{names}，{rounds} 轮）Codex 的综合总结：\n{discussion.summary}'
+    else:   # 停止或出错：记下已有的发言（截短）
+        body = f'（{names}，未完成）已有发言：\n' + transcript_text(discussion.turns)[-3000:]
+    council.remember(chat_id, f'（群里刚结束一场讨论）话题：{topic}', body, answer_chars=4000)
+
+
 async def run_discussion(message, context, discussion: Discussion, topic: str, rounds: int, sent=None) -> None:
     started = time.monotonic()
     log.info('discuss_start chat=%s rounds=%s speakers=%s', message.chat_id, rounds, len(discussion.speakers))
@@ -492,6 +506,7 @@ async def run_discussion(message, context, discussion: Discussion, topic: str, r
         for extra in bots:
             await extra.initialize()
         result = await discussion.run(topic, rounds)
+        remember_discussion(context, message.chat_id, discussion, topic, rounds, result)
         if result == 'stopped':
             await message.reply_text('讨论已停止。')
         elif result.startswith('error:'):

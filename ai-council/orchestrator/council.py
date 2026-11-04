@@ -55,13 +55,17 @@ class Council:
         history = self.history(chat_id)
         reply = await self.agent.respond(text, tuple(history), image)
         # 记忆里只留文字，不重复上传图片。
-        turns = history + [
-            {'role': 'user', 'content': f'[图片] {text}' if image else text},
-            {'role': 'assistant', 'content': reply.text[:HISTORY_ANSWER_CHARS]},
+        self.remember(chat_id, f'[图片] {text}' if image else text, reply.text)
+        return reply
+
+    def remember(self, chat_id: int, user_text: str, answer: str, answer_chars: int = HISTORY_ANSWER_CHARS) -> None:
+        """把一问一答记进这个聊天的记忆（也用于把群里讨论的总结记下来，之后可以让它整理、存 Notion）。"""
+        turns = self.history(chat_id) + [
+            {'role': 'user', 'content': user_text},
+            {'role': 'assistant', 'content': answer[:answer_chars]},
         ]
         turns = turns[-HISTORY_TURNS * 2:]
         while turns and sum(len(m['content']) for m in turns) > HISTORY_CHARS:
             turns = turns[2:]
         self.memory[chat_id] = (self.clock(), turns)
         self._save()
-        return reply
