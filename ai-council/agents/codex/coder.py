@@ -31,11 +31,11 @@ import shutil
 import stat
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from agents.codex.client import DEFAULT_CODEX, HOME, PREFIX, hidden_binds
+from agents.codex.client import DEFAULT_CODEX, HOME, PREFIX, hidden_binds, codex_usage
 from config import ROOT
 
 CONFIG_FILE = ROOT / 'codex_code.json'
@@ -71,6 +71,7 @@ class CodeResult:
     url: str = ''
     pushed: bool = False
     outside: tuple = ()
+    usage: dict = field(default_factory=dict)   # 本次 Codex 的 token 用量
 
 
 def load_code_config() -> Optional[dict]:
@@ -138,7 +139,7 @@ class CodexCoder:
             raise CoderError('克隆仓库失败，请检查网络或部署密钥。')
 
     def codex_cmd(self, workdir: str, out: Path, empty: Optional[Path] = None) -> list[str]:
-        args = [str(self.codex), '-c', 'cli_auth_credentials_store="file"', 'exec', '--ephemeral',
+        args = [str(self.codex), '-c', 'cli_auth_credentials_store="file"', 'exec', '--json', '--ephemeral',
                 '-s', 'danger-full-access', '-C', workdir, '-o', str(out), '-']
         if not self.use_proot:
             return args
@@ -240,9 +241,10 @@ class CodexCoder:
                 empty = scratch / 'empty'
                 empty.mkdir()
                 started = time.time() - 1
-                rc, _ = await self.sh(*self.codex_cmd(work, out, empty), cwd=work,
+                rc, output = await self.sh(*self.codex_cmd(work, out, empty), cwd=work,
                                       stdin=f'{INSTRUCTIONS}\n\n任务：{task}', timeout=self.timeout)
                 summary = read_no_follow(out)
+                usage = codex_usage(output)
             finally:
                 shutil.rmtree(scratch, ignore_errors=True)
             outside = self.changed_outside(started, work)
@@ -251,14 +253,14 @@ class CodexCoder:
             summary = summary or '（Codex 没有给出总结）'
             stat_text, pushed = await self.publish(cfg, work, branch, task)
             if not stat_text:
-                return CodeResult(summary, branch, outside=outside)
+                return CodeResult(summary, branch, outside=outside, usage=usage)
             if not pushed:
                 url = ''
             elif cfg['push_repo'] == cfg['repo']:
                 url = f"{cfg['web'].rstrip('/')}/compare/main...{branch}"
             else:   # 分支在单独的写入仓库里
                 url = f"{cfg['push_web'].rstrip('/')}/tree/{branch}"
-            return CodeResult(summary, branch, stat_text, url, pushed, outside)
+            return CodeResult(summary, branch, stat_text, url, pushed, outside, usage)
 
 
 def remove_path(path: Path) -> None:

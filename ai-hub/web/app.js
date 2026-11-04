@@ -78,7 +78,7 @@ function render(data) {
     const u = b.usage || {};
     const k = n => n >= 10000 ? (n / 1000).toFixed(0) + 'k' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n || 0);
     $('.tokens', card).textContent = `${k(u.tokens_in)} / ${k(u.tokens_out)}`;
-    $('.cost', card).textContent = u.cost == null ? '未设价格' : `≈ ${u.cost < 0.01 && u.cost > 0 ? '<0.01' : u.cost.toFixed(2)} ${u.currency || ''}`;
+    $('.cost', card).textContent = u.cost == null ? '未设价格' : `≈ ${u.cost < 0.01 && u.cost > 0 ? '<0.01' : u.cost.toFixed(2)} ${u.currency || ''}${u.note ? ` · ${u.note}` : ''}`;
     const g = b.autorestart || {};
     $('.guard', card).textContent = !g.enabled ? '关闭'
       : g.want === 'stopped' ? '已暂停（手动停止）'

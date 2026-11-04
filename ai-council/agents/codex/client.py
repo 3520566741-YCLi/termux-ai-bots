@@ -5,6 +5,7 @@
 Codex 自己的登录文件无法屏蔽（它启动时需要），所以只允许主人使用。
 """
 import asyncio
+import json
 import contextlib
 import os
 import shutil
@@ -68,6 +69,26 @@ def hidden_binds(empty: Path, files_dir: Optional[Path] = None) -> list:
     return binds
 
 
+def codex_usage(output: str) -> dict:
+    """从 codex exec --json 的输出里取 token 用量（turn.completed 事件），换成和 DeepSeek 相同的字段名。
+
+    input_tokens 已含缓存命中的部分；output_tokens 已含推理部分。用的是 ChatGPT 订阅额度，
+    AI 中枢按清单里的 API 价格估算“相当于多少钱”。
+    """
+    total = {'prompt_tokens': 0, 'completion_tokens': 0, 'prompt_cache_hit_tokens': 0}
+    for line in output.splitlines():
+        if '"turn.completed"' not in line:
+            continue
+        try:
+            usage = json.loads(line).get('usage') or {}
+        except ValueError:
+            continue
+        total['prompt_tokens'] += int(usage.get('input_tokens') or 0)
+        total['completion_tokens'] += int(usage.get('output_tokens') or 0)
+        total['prompt_cache_hit_tokens'] += int(usage.get('cached_input_tokens') or 0)
+    return total
+
+
 class CodexAgent:
     def __init__(self, codex: Path = DEFAULT_CODEX, use_proot: bool = True, timeout: int = CODEX_TIMEOUT,
                  toolkit: Optional[Toolkit] = None):
@@ -89,7 +110,7 @@ class CodexAgent:
                    '-c', 'mcp_servers.repo.startup_timeout_sec=20',
                    # 这几个工具只读：免审批，否则 exec 模式下会被自动拒绝
                    '-c', 'mcp_servers.repo.default_tools_approval_mode="approve"']
-        args = [str(self.codex), '--search', '-c', 'cli_auth_credentials_store="file"', *mcp, 'exec',
+        args = [str(self.codex), '--search', '-c', 'cli_auth_credentials_store="file"', *mcp, 'exec', '--json',
                 '--skip-git-repo-check', '--ephemeral', '-s', 'read-only', '-C', str(workdir),
                 '-o', str(out)]
         if image:
@@ -123,10 +144,10 @@ class CodexAgent:
                 async with (ToolGateway(self.toolkit) if use_tools else contextlib.nullcontext()) as gateway:
                     proc = await asyncio.create_subprocess_exec(
                         *self.command(workdir, out, image_path, gateway), cwd=workdir, env=env,
-                        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL,
+                        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
                     try:
-                        await asyncio.wait_for(proc.communicate(prompt.encode()), self.timeout)
+                        output, _ = await asyncio.wait_for(proc.communicate(prompt.encode()), self.timeout)
                     except asyncio.TimeoutError:
                         proc.kill()
                         await proc.wait()
@@ -136,4 +157,4 @@ class CodexAgent:
                 answer = out.read_text(encoding='utf-8', errors='replace').strip() if out.exists() else ''
                 if not answer:
                     raise ValueError('Codex 返回空回复')
-                return Reply(answer)
+                return Reply(answer, codex_usage(output.decode('utf-8', 'replace')))

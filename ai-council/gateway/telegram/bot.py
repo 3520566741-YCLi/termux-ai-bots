@@ -413,7 +413,10 @@ async def _run_codex(message, council, text: str, image: Optional[Image]) -> Non
         await message.reply_text('Codex 暂时不可用，请检查网络或 ChatGPT 登录状态。')
         return
     await message.reply_text(limit_reply(reply.text), parse_mode=None)
-    log.info('codex_reply_sent chat=%s message=%s elapsed=%.1fs', chat_id, message.message_id, time.monotonic() - now)
+    u = reply.usage or {}
+    log.info('codex_reply_sent chat=%s message=%s elapsed=%.1fs tokens_in=%s tokens_out=%s cache_hit=%s',
+             chat_id, message.message_id, time.monotonic() - now,
+             u.get('prompt_tokens', 0), u.get('completion_tokens', 0), u.get('prompt_cache_hit_tokens', 0))
 
 
 # ---------- /discuss：DeepSeek、Claude、Codex 在群里轮流讨论（DeepSeek 机器人主持，Codex 总结） ----------
@@ -698,7 +701,10 @@ async def _run_code(message, coder, task: str) -> None:
     if result.outside:
         tail += '\n\n⚠️ 仓库以外有文件在任务期间被改动，请留意：\n' + '\n'.join(result.outside)
     await message.reply_text(limit_reply(f'{result.summary}\n\n{tail}'), parse_mode=None)
-    log.info('code_done chat=%s pushed=%s elapsed=%.0fs', chat_id, result.pushed, time.monotonic() - started)
+    u = result.usage or {}
+    log.info('code_done chat=%s pushed=%s elapsed=%.0fs tokens_in=%s tokens_out=%s cache_hit=%s',
+             chat_id, result.pushed, time.monotonic() - started,
+             u.get('prompt_tokens', 0), u.get('completion_tokens', 0), u.get('prompt_cache_hit_tokens', 0))
 
 
 async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

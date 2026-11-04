@@ -211,5 +211,15 @@ class RoleSplitTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('只为主人', message.reply_text.call_args.args[0])
 
 
+class CodexUsageTest(unittest.TestCase):
+    def test_usage_from_json_events(self):
+        from agents.codex.client import codex_usage
+        out = ('{"type":"thread.started"}\nReconnecting...\n'
+               '{"type":"turn.completed","usage":{"input_tokens":16807,"cached_input_tokens":12288,"output_tokens":5}}\n')
+        self.assertEqual(codex_usage(out), {'prompt_tokens': 16807, 'completion_tokens': 5,
+                                            'prompt_cache_hit_tokens': 12288})
+        self.assertEqual(codex_usage('')['prompt_tokens'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()

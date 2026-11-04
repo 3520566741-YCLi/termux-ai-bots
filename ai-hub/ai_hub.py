@@ -283,9 +283,9 @@ def usage_today(bot):
         return _usage_cache[bot['id']][1]
     pricing = bot['pricing']
     total = {'tokens_in': 0, 'tokens_out': 0, 'cache_hit': 0, 'cost': 0.0 if pricing else None,
-             'currency': (pricing or {}).get('currency', '')}
+             'currency': (pricing or {}).get('currency', ''), 'note': (pricing or {}).get('note', '')}
     for line in _lines(files):
-            if not line.startswith(today) or ' reply_sent ' not in line:
+            if not line.startswith(today) or not any(f' {e} ' in line for e in REPLY_EVENTS):
                 continue
             m = USAGE_RE.search(line)
             if not m:

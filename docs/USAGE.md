@@ -60,7 +60,7 @@ Codex always ends with a combined summary of all proposals. If Claude is not con
 
 Each time the console starts it creates a new access token, and `ai-hub open` first verifies that port 8765 really is the console before opening the browser; if another program holds the port it warns instead.
 
-The page shows each bot's state, uptime, today's questions/answers, estimated cost (from `pricing` in `~/.config/ai-hub/bots.json`), recent redacted log lines, network status and extra buttons such as **开放 Codex 绑定（30 分钟）** (its result line shows the 6-digit code for `/codexbind`). The watchdog only restarts bots you last started (a bot you stopped stays stopped) and at most 5 times per hour.
+The page shows each bot's state, uptime, today's questions/answers, estimated cost (from `pricing` in `~/.config/ai-hub/bots.json`; Codex runs on your ChatGPT subscription, so its figure is an API-price estimate of the tokens it used, shown with `note`), recent redacted log lines, network status and extra buttons such as **开放 Codex 绑定（30 分钟）** (its result line shows the 6-digit code for `/codexbind`). The watchdog only restarts bots you last started (a bot you stopped stays stopped) and at most 5 times per hour.
 
 To add another AI to the console, see [ai-hub/ADDING_AI.md](../ai-hub/ADDING_AI.md).
 
