@@ -73,7 +73,8 @@ function render(data) {
     $('.desc', card).textContent = [b.description, b.channel].filter(Boolean).join(' · ') || b.id;
     $('.pill', card).textContent = !b.installed ? '未安装' : b.running ? (err ? '运行·有告警' : '运行中') : '已停止';
     $('.uptime', card).textContent = b.running ? fmtUptime(b.uptime) : '–';
-    $('.today', card).textContent = `${b.summary.requests_today} / ${b.summary.replies_today}`;
+    const d = b.summary.discuss_today || 0;
+    $('.today', card).textContent = `${b.summary.requests_today} / ${b.summary.replies_today}` + (d ? ` · 讨论 ${d}` : '');
     const u = b.usage || {};
     const k = n => n >= 10000 ? (n / 1000).toFixed(0) + 'k' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n || 0);
     $('.tokens', card).textContent = `${k(u.tokens_in)} / ${k(u.tokens_out)}`;

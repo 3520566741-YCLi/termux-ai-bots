@@ -125,6 +125,29 @@ class AiHubTest(unittest.TestCase):
         self.assertFalse(self.hub.is_peak(datetime(2026, 10, 20, 13, 0), self.pricing))    # 午休
         self.assertFalse(self.hub.is_peak(datetime(2026, 10, 24, 10, 0), self.pricing))    # 周六
 
+    def test_counts_cover_whole_day_and_rotated_logs(self):
+        bot = self.hub.get_bot('fake')
+        log = bot['dir'] / 'logs/bot.log'
+        rotated = log.with_name('bot.log.1')
+        old = log.read_text()
+        today = time.strftime('%Y-%m-%d')
+        noise = ''.join(f'{today} 09:00:{i % 60:02d},000 WARNING telegram_error type=NetworkError\n' for i in range(80))
+        rotated.write_text(f'{today} 08:00:00,000 INFO request chat=1 message=1 kind=text\n'
+                           f'{today} 08:00:02,000 INFO reply_sent chat=1 message=1 elapsed=2.0s tokens_in=100 tokens_out=10 cache_hit=0\n'
+                           '2000-01-01 08:00:00,000 INFO request chat=1 message=0 kind=text\n')
+        log.write_text(old + f'{today} 09:30:00,000 INFO codex_request chat=1 message=2 kind=text\n'
+                             f'{today} 09:30:30,000 INFO codex_reply_sent chat=1 message=2 elapsed=30.0s\n'
+                             f'{today} 09:40:00,000 INFO reply_sent chat=1 message=0 elapsed=0.0s tokens_in=50 tokens_out=5 cache_hit=0 kind=discuss\n'
+                             + noise)
+        try:
+            s = self.hub.summarize(bot, self.hub.read_events(bot))
+            self.assertEqual((s['requests_today'], s['replies_today'], s['discuss_today']), (2, 2, 1))
+            u = self.hub.usage_today(bot)
+            self.assertEqual(u['tokens_in'], 150)          # 轮转出去的旧日志也算进当天花费
+        finally:
+            log.write_text(old)
+            rotated.unlink()
+
     def test_probe(self):
         self.assertTrue(self.hub.probe('http://127.0.0.1:18765/')['ok'])
         self.assertFalse(self.hub.probe('http://127.0.0.1:9/')['ok'])

@@ -182,17 +182,50 @@ def read_events(bot, limit=40):
     return events[-limit:]
 
 
-def summarize(bot, events):
+REQUEST_EVENTS = {'request', 'codex_request', 'code_request'}
+REPLY_EVENTS = {'reply_sent', 'codex_reply_sent', 'code_done'}
+_count_cache = {}
+
+
+def counts_today(bot):
+    """扫今天的完整日志（含轮转出去的 .1/.2）数提问、回复、讨论发言；按文件大小和修改时间缓存。"""
+    path = bot['dir'] / bot['log_file']
+    files = log_files(path)
     today = datetime.now().strftime('%Y-%m-%d')
-    todays = [e for e in events if e['day'] == today]
+    try:
+        key = (today, tuple((str(p), p.stat().st_size, p.stat().st_mtime) for p in files))
+    except OSError:
+        return {'requests': 0, 'replies': 0, 'discuss': 0}
+    cached = _count_cache.get(bot['id'])
+    if cached and cached[0] == key:
+        return cached[1]
+    counts = {'requests': 0, 'replies': 0, 'discuss': 0}
+    for line in _lines(files):
+        if not line.startswith(today):
+            continue
+        m = LOG_RE.match(line.rstrip('\n'))
+        if not m:
+            continue
+        event, rest = m.group(4), m.group(5)
+        if event in REQUEST_EVENTS:
+            counts['requests'] += 1
+        elif event in REPLY_EVENTS:
+            counts['discuss' if 'kind=discuss' in rest else 'replies'] += 1
+    _count_cache[bot['id']] = (key, counts)
+    return counts
+
+
+def summarize(bot, events):
+    counts = counts_today(bot)
     last_error = next((e for e in reversed(events) if e['level'] in ('WARNING', 'ERROR')), None)
     recent = time.time() - 600
     net_errors = sum(1 for e in events if 'error' in e['event'] and 'NetworkError' in e['detail']
                      and _epoch(e) >= recent)
     return {
         'net_errors_10m': net_errors,
-        'replies_today': sum(e['event'] == 'reply_sent' for e in todays),
-        'requests_today': sum(e['event'] == 'request' for e in todays),
+        'replies_today': counts['replies'],
+        'requests_today': counts['requests'],
+        'discuss_today': counts['discuss'],   # 群里讨论的发言（DeepSeek、Claude 各记各的）
         'last_error': last_error,
         'last_event': events[-1] if events else None,
     }
@@ -218,22 +251,37 @@ def is_peak(moment, pricing):
     return any(a <= moment.hour < b for a, b in pricing.get('peak_hours', [[9, 12], [14, 18]]))
 
 
+def log_files(path):
+    """日志满 1 MB 会轮转成 bot.log.1、.2；按时间先后返回存在的文件。"""
+    return [p for p in (path.with_name(path.name + '.2'), path.with_name(path.name + '.1'), path) if p.exists()]
+
+
+def _lines(files):
+    for p in files:
+        try:
+            with p.open(encoding='utf-8', errors='replace') as f:
+                yield from f
+        except OSError:
+            continue
+
+
 def usage_today(bot):
     """统计今天日志里每次回复的 token，并按清单里的价格估算费用（法定节假日无法识别，按工作日计）。"""
     path = bot['dir'] / bot['log_file']
-    try:
-        st = path.stat()
-    except OSError:
+    files = log_files(path)
+    if not files:
         return {'tokens_in': 0, 'tokens_out': 0, 'cache_hit': 0, 'cost': None, 'currency': ''}
     today = datetime.now().strftime('%Y-%m-%d')
-    key = (str(path), st.st_mtime, st.st_size, today)
+    try:
+        key = (today, tuple((str(p), p.stat().st_mtime, p.stat().st_size) for p in files))
+    except OSError:
+        return {'tokens_in': 0, 'tokens_out': 0, 'cache_hit': 0, 'cost': None, 'currency': ''}
     if _usage_cache.get(bot['id'], (None,))[0] == key:
         return _usage_cache[bot['id']][1]
     pricing = bot['pricing']
     total = {'tokens_in': 0, 'tokens_out': 0, 'cache_hit': 0, 'cost': 0.0 if pricing else None,
              'currency': (pricing or {}).get('currency', '')}
-    with path.open(encoding='utf-8', errors='replace') as f:
-        for line in f:
+    for line in _lines(files):
             if not line.startswith(today) or ' reply_sent ' not in line:
                 continue
             m = USAGE_RE.search(line)

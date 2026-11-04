@@ -433,7 +433,7 @@ async def start_discussion(update: Update, context: ContextTypes.DEFAULT_TYPE, a
 
 
 def log_usage_line(root, chat_id: int, usage: dict) -> None:
-    """把讨论里 Claude 的用量记进 Claude 实例自己的日志，AI 中枢按 Claude 的价格算“今日花费”。"""
+    """把讨论里 Claude / Codex 的发言记进各自实例的日志，AI 中枢按各自的价格算“今日花费”、数讨论发言。"""
     try:
         (root / 'logs').mkdir(parents=True, exist_ok=True)
         stamp = time.strftime('%Y-%m-%d %H:%M:%S') + ',000'
@@ -466,7 +466,8 @@ def make_discussion(context, chat_id: int, codex_token: str, claude_cfg, names: 
         log.info('reply_sent chat=%s message=0 elapsed=0.0s tokens_in=%s tokens_out=%s cache_hit=%s kind=discuss',
                  chat_id, u.get('prompt_tokens', 0), u.get('completion_tokens', 0), u.get('prompt_cache_hit_tokens', 0))
 
-    codex = Speaker('Codex', codex_agent.respond, post_codex)
+    # Codex 的发言（含总结）记进 Codex 实例自己的日志，AI 中枢才能数到它在讨论里的发言
+    codex = Speaker('Codex', codex_agent.respond, post_codex, lambda u: log_usage_line(CODEX_ROOT, chat_id, u))
     available = {'DeepSeek': Speaker('DeepSeek', ask_deepseek, post_deepseek, deepseek_usage), 'Codex': codex}
     if claude_cfg is not None:
         claude_agent = ClaudeAgent(claude_cfg, context.bot_data['client'], toolkit=toolkit)
