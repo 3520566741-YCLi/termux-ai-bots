@@ -2,7 +2,7 @@
 
 **English** | [简体中文](#简体中文)
 
-The Telegram bot. One codebase, three roles selected by `BOT_ROLE` in the instance's `.env`: `deepseek` (`~/ai-council`), `claude` (`~/ai-claude`), `codex` (`~/ai-codex`). Setup: [../docs/SETUP.md](../docs/SETUP.md). Usage: [../docs/USAGE.md](../docs/USAGE.md).
+The Telegram bot. One codebase, three roles selected by `BOT_ROLE` in the instance's `.env`. On the Mini PC the instances live in `~/ai-council/runtime/<role>/` and run as systemd user services — see the root [README](../README.md). Phone (Termux) setup docs moved to [../legacy/termux/docs](../legacy/termux/docs/).
 
 | Path | Purpose |
 |---|---|
@@ -18,7 +18,8 @@ The Telegram bot. One codebase, three roles selected by `BOT_ROLE` in the instan
 | `scripts/codex_bind_window.sh` | open the 30-minute `/codexbind` window and print the one-time 6-digit code (`/codexbind <code>`) |
 | `scripts/receive_bot_token.py` | optional: receive a secret from a computer over `adb forward`; needs `--nonce <hex>`, the sender sends `<nonce> <secret>` |
 | `scripts/tools_mcp.py` | stdio MCP server Codex starts to reach the gateway |
-| `start.sh`, `stop.sh` | background start (PID file, wake lock) / graceful stop |
+| `orchestrator/debate.py`, `store.py`, `intent.py` | Mini PC council engine (Council State, FINAL round), SQLite, natural-language requests |
+| `gateway/telegram/council_cmds.py`, `logsetup.py`, `watchdog.py` | /debate etc., rotating redacted logs, systemd watchdog and phone-backup yield |
 
 Security behaviour (details in [../docs/SETUP.md](../docs/SETUP.md) step 14 and "Security notes"):
 
