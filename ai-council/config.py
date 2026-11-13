@@ -10,11 +10,15 @@ from dotenv import dotenv_values
 # start.sh 用 AI_BOT_ROOT 指定实例目录。
 ROOT = Path(os.environ['AI_BOT_ROOT']).resolve() if os.environ.get('AI_BOT_ROOT') else Path(__file__).resolve().parent
 ROLES = ('deepseek', 'codex', 'claude')
-# 讨论由 DeepSeek 机器人主持，需要读取 Codex、Claude 实例的配置与主人绑定
+# 讨论由 DeepSeek 机器人主持，需要读取 Codex、Claude 实例的配置与主人绑定。
+# Mini PC 上三个实例都在 ~/ai-council/runtime/<角色>/ 下（systemd 单元里设置这几个环境变量）。
 CODEX_ROOT = Path(os.path.expanduser(os.environ.get('AI_CODEX_ROOT', '~/ai-codex')))
 CLAUDE_ROOT = Path(os.path.expanduser(os.environ.get('AI_CLAUDE_ROOT', '~/ai-claude')))
-# Claude：官方 API（按量计费），用 httpx 直接调用（手机上装不了官方 SDK 依赖的 Rust 组件）。
-CLAUDE_MODEL = 'claude-sonnet-5-5'
+# 讨论数据库、Codex 跨进程锁、心跳文件等共享数据（默认放在实例目录下的 data/）
+DATA_DIR = Path(os.path.expanduser(os.environ['AI_COUNCIL_DATA'])) if os.environ.get('AI_COUNCIL_DATA') else ROOT / 'data'
+# 日志目录：默认实例目录下的 logs/；Mini PC 上设成 ~/ai-council/logs/<角色>
+LOG_DIR = Path(os.path.expanduser(os.environ['AI_LOG_DIR'])) if os.environ.get('AI_LOG_DIR') else ROOT / 'logs'
+# Claude：官方 API（按量计费），用 httpx 直接调用。模型名不写死，必须在 .env 里配置 CLAUDE_MODEL / DEEPSEEK_MODEL。
 CLAUDE_API = 'https://api.anthropic.com/v1/messages'
 MAX_INPUT_CHARS = 4000
 MAX_REPLY_UNITS = 3500
@@ -64,8 +68,14 @@ def load_config(root: Optional[Path] = None) -> Config:
     if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment:
         raise ValueError('DEEPSEEK_BASE_URL 必须是有效的 HTTPS 地址')
     if role == 'claude':
-        return Config(token, key, ids, CLAUDE_API, values.get('CLAUDE_MODEL') or CLAUDE_MODEL, role)
-    return Config(token, key, ids, base_url, values.get('DEEPSEEK_MODEL') or 'deepseek-flash', role)
+        model = (values.get('CLAUDE_MODEL') or '').strip()
+        if not model:
+            raise ValueError('请在 .env 填写 CLAUDE_MODEL（模型名不写死在代码里）')
+        return Config(token, key, ids, CLAUDE_API, model, role)
+    model = (values.get('DEEPSEEK_MODEL') or '').strip()
+    if role == 'deepseek' and not model:
+        raise ValueError('请在 .env 填写 DEEPSEEK_MODEL（模型名不写死在代码里）')
+    return Config(token, key, ids, base_url, model, role)
 
 
 def limit_reply(text: str) -> str:

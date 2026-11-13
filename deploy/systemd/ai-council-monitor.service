@@ -1,0 +1,7 @@
+[Unit]
+Description=AI Council 监控检查（服务、心跳，出问题自动重启并 Telegram 告警）
+
+[Service]
+Type=oneshot
+ExecStart=%h/ai-council/.venv/bin/python %h/ai-council/scripts/monitor.py check
+TimeoutStartSec=300

@@ -5,6 +5,7 @@ from typing import Optional, Sequence
 import httpx
 
 from agents.base import Image, Reply
+from agents.http import post_json
 from agents.tools import MAX_CALLS_PER_ROUND, SKIPPED, Toolkit, dumps_args
 from config import Config, REQUEST_TIMEOUT
 
@@ -55,11 +56,9 @@ class DeepSeekAgent:
                     'max_tokens': 2000 if has_notion else 700, 'stream': False}
             if tools and round_no < MAX_TOOL_ROUNDS:   # 最后一轮不再给工具，逼它给出答案
                 body['tools'] = tools
-            response = await self.client.post(self.config.base_url + '/chat/completions',
-                                              headers={'Authorization': 'Bearer ' + self.config.key},
-                                              json=body, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            data = response.json()
+            data = await post_json(self.client, self.config.base_url + '/chat/completions',
+                                   headers={'Authorization': 'Bearer ' + self.config.key},
+                                   json=body, timeout=REQUEST_TIMEOUT, label='deepseek')
             raw = data.get('usage') or {}
             for k in USAGE_KEYS:
                 if isinstance(raw.get(k), int):
@@ -83,13 +82,11 @@ class DeepSeekAgent:
         if calls or MARKUP_RE.search(answer):
             # 还想继续查（或把工具调用写进了正文）：不给工具再问一次，要它根据已有结果直接回答
             messages.append({'role': 'user', 'content': NO_MORE_TOOLS})
-            response = await self.client.post(self.config.base_url + '/chat/completions',
-                                              headers={'Authorization': 'Bearer ' + self.config.key},
-                                              json={'model': self.config.model, 'messages': messages,
-                                                    'thinking': {'type': 'disabled'}, 'max_tokens': 2000,
-                                                    'stream': False}, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            data = response.json()
+            data = await post_json(self.client, self.config.base_url + '/chat/completions',
+                                   headers={'Authorization': 'Bearer ' + self.config.key},
+                                   json={'model': self.config.model, 'messages': messages,
+                                         'thinking': {'type': 'disabled'}, 'max_tokens': 2000,
+                                         'stream': False}, timeout=REQUEST_TIMEOUT, label='deepseek')
             raw = data.get('usage') or {}
             for k in USAGE_KEYS:
                 if isinstance(raw.get(k), int):

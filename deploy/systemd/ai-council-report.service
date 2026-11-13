@@ -1,0 +1,7 @@
+[Unit]
+Description=AI Council 每日用量日报（发到 Telegram）
+
+[Service]
+Type=oneshot
+ExecStart=%h/ai-council/.venv/bin/python %h/ai-council/scripts/monitor.py report
+TimeoutStartSec=120

@@ -1,0 +1,6 @@
+[Unit]
+Description=AI Council 每日备份（数据库、配置、Codex 登录除外）
+
+[Service]
+Type=oneshot
+ExecStart=%h/ai-council/scripts/council backup

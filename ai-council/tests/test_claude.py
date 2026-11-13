@@ -8,7 +8,8 @@ import httpx
 
 from agents.base import Image
 from agents.claude.client import API_VERSION, FALLBACK_BETA, ClaudeAgent, ClaudeRefused
-from config import CLAUDE_API, CLAUDE_MODEL, Config, load_config
+from config import CLAUDE_API, Config, load_config
+CLAUDE_MODEL = 'test-claude-model'
 
 
 def config():
@@ -41,7 +42,7 @@ class ClaudeAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(req.headers['anthropic-version'], API_VERSION)
         self.assertEqual(req.headers['anthropic-beta'], FALLBACK_BETA)
         body = json.loads(req.content)
-        self.assertEqual(body['model'], 'claude-sonnet-5-5')
+        self.assertEqual(body['model'], CLAUDE_MODEL)
         self.assertEqual(body['fallbacks'], 'default')
         self.assertEqual(body['output_config'], {'effort': 'low'})
         self.assertEqual(body['tools'], [{'type': 'web_search_20260209', 'name': 'web_search', 'max_uses': 3}])
@@ -88,7 +89,7 @@ class ClaudeConfigTest(unittest.TestCase):
             return load_config(Path(tmp))
 
     def test_claude_role(self):
-        cfg = self.load('TELEGRAM_BOT_TOKEN=1:x\nALLOWED_CHAT_IDS=-5\nBOT_ROLE=claude\nANTHROPIC_API_KEY=sk-ant-k\n')
+        cfg = self.load('TELEGRAM_BOT_TOKEN=1:x\nALLOWED_CHAT_IDS=-5\nBOT_ROLE=claude\nANTHROPIC_API_KEY=sk-ant-k\nCLAUDE_MODEL=test-claude-model\n')
         self.assertEqual((cfg.role, cfg.key, cfg.model, cfg.base_url), ('claude', 'sk-ant-k', CLAUDE_MODEL, CLAUDE_API))
         with self.assertRaises(ValueError):
             self.load('TELEGRAM_BOT_TOKEN=1:x\nALLOWED_CHAT_IDS=-5\nBOT_ROLE=claude\nDEEPSEEK_API_KEY=k\n')

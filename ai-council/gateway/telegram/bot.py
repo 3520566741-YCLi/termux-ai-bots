@@ -7,14 +7,12 @@ import os
 import re
 import secrets
 from collections import deque
-from logging.handlers import RotatingFileHandler
-import subprocess
 import time
 from typing import Optional
 
 import httpx
 from telegram import Bot, Update
-from telegram.error import TelegramError
+from telegram.error import Conflict, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from agents.base import Image
@@ -24,8 +22,11 @@ from agents.codex.coder import CoderBusy, CoderError, CodexCoder
 from agents.files import MAX_FILE_BYTES, FileStore, FileStoreError
 from agents.tools import Toolkit
 from agents.deepseek.client import DeepSeekAgent
-from config import (CLAUDE_ROOT, CODEX_BIND_WINDOW, CODEX_ROOT, CODEX_TIMEOUT, DEFAULT_IMAGE_PROMPT,
+from config import (CLAUDE_ROOT, CODEX_BIND_WINDOW, CODEX_ROOT, CODEX_TIMEOUT, DATA_DIR, DEFAULT_IMAGE_PROMPT, LOG_DIR,
                     MAX_IMAGE_BYTES, MAX_INPUT_CHARS, MEMORY_DIR, REQUEST_TIMEOUT, ROOT, limit_reply, load_config)
+from gateway.telegram import council_cmds
+from gateway.telegram.logsetup import setup_logging
+from gateway.telegram import watchdog
 from orchestrator.council import Council
 from orchestrator.discussion import (DEFAULT_ROUNDS, MAX_ROUNDS, PARTICIPANTS, Discussion, Speaker, parse_discuss_args,
                                      transcript_text)
@@ -167,6 +168,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     discuss = plain_discuss_args(message.text) if not message.text.lstrip().startswith('/') else None
     if discuss is not None and context.bot_data['config'].role == 'deepseek' and is_codex_owner(update):
         await start_discussion(update, context, discuss)
+        return
+    if context.bot_data['config'].role == 'deepseek' and await council_cmds.maybe_natural(update, context, message.text):
         return
     text = strip_command(message.text)
     if not text:
@@ -344,7 +347,7 @@ async def handle_codexbind(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 context.bot_data['bind_tries'] = 0
             log.warning('codex_bind_rejected chat=%s', message.chat_id)
         # 码不对和窗口没开回同样的话，不透露窗口是否开着
-        await message.reply_text('现在不能绑定。请在手机上点“开放 Codex 绑定”（或运行 bash ~/ai-codex/scripts/codex_bind_window.sh），'
+        await message.reply_text('现在不能绑定。请在 Mini PC 上运行 council bind（手机备份上是 ai-hub 的“开放 Codex 绑定”），'
                                  '30 分钟内发送 /codexbind 加上显示的 6 位绑定码。')
         return
     old = os.umask(0o077)
@@ -457,6 +460,18 @@ DISCUSS_HELP = (f'用法：讨论 话题（默认 {DEFAULT_ROUNDS} 轮，DeepSee
 
 async def start_discussion(update: Update, context: ContextTypes.DEFAULT_TYPE, args: str) -> None:
     message = update.message
+    svc = context.bot_data.get('council_service')
+    if svc is not None:
+        # Mini PC 版：旧口令“讨论 3轮 [Claude DeepSeek：]话题”/“停止讨论”交给新的讨论引擎（SQLite、FINAL 轮）
+        if args.strip().lower() in ('stop', '停止'):
+            await council_cmds.cancel_active(message, svc)
+            return
+        rounds, names, topic = parse_discuss_args(args)
+        if not topic.strip():
+            await message.reply_text(council_cmds.HELP)
+            return
+        await svc.submit(message, topic, rounds, names or None)
+        return
     if not in_group(message):
         await message.reply_text('讨论需要在群里发起（几个机器人都在群里才能轮流发言）。')
         return
@@ -709,6 +724,9 @@ async def _run_code(message, coder, task: str) -> None:
 
 async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.warning('telegram_error type=%s', type(context.error).__name__)
+    if isinstance(context.error, Conflict):
+        # 同一个 Token 另一台设备（手机备份）也在收消息：Mini PC 永远让位，自动暂停
+        await watchdog.on_conflict(context.application)
 
 
 async def ready(app: Application) -> None:
@@ -728,13 +746,59 @@ async def ready(app: Application) -> None:
         app.bot_data['council'] = Council(ClaudeAgent(config, client, toolkit=toolkit), store=MEMORY_DIR / 'claude.json')
     else:
         app.bot_data['council'] = Council(DeepSeekAgent(config, client, toolkit), store=MEMORY_DIR / 'deepseek.json')
+        await start_council_service(app, config, client, toolkit)
     log.info('bot_ready username=%s role=%s model=%s tools=%s sees_all_group_messages=%s', app.bot.username,
              config.role, config.model,
              ','.join(toolkit.names(web=config.role == 'deepseek', notion=config.role == 'deepseek')) or '-',
              getattr(app.bot.bot, 'can_read_all_group_messages', None))
 
 
+async def start_council_service(app: Application, config, client, toolkit) -> None:
+    """主持实例：组装三个模型、打开 SQLite、启动讨论队列（任何一步失败都不影响普通问答）。"""
+    from orchestrator.store import Store
+    try:
+        claude_cfg = codex_cfg = None
+        try:
+            claude_cfg = load_config(CLAUDE_ROOT)
+        except (OSError, ValueError):
+            log.warning('council_member_missing model=Claude')
+        try:
+            codex_cfg = load_config(CODEX_ROOT)
+        except (OSError, ValueError):
+            log.warning('council_member_missing model=Codex')
+        members, bots, current_chat = council_cmds.build_members(app, app.bot_data['council'].agent, claude_cfg,
+                                                                 codex_cfg, toolkit, client)
+        for extra in bots:
+            await extra.initialize()
+        store = Store(DATA_DIR / 'council.db')
+        alert_chats = [int(x) for x in os.environ.get('ALERT_CHAT_IDS', '').split(',') if x.strip()] or \
+            sorted(c for c in config.chats if c < 0)[:1] or sorted(config.chats)[:1]
+        svc = council_cmds.CouncilService(app, store, members, alert_chats)
+        # verbose 模式下各模型用自己的机器人发言：发言前先记住当前讨论在哪个聊天
+        original_run = svc.engine.run
+
+        async def run_with_chat(debate_id):
+            row = store.get(debate_id)
+            current_chat['id'] = row.chat_id if row else None
+            return await original_run(debate_id)
+        svc.engine.run = run_with_chat
+        app.bot_data.update(council_service=svc, council_bots=bots)
+        await svc.start()
+        log.info('council_ready members=%s db=%s', ','.join(members), 'council.db')
+    except Exception as error:
+        log.error('council_start_error type=%s', type(error).__name__)
+
+
 async def shutdown(app: Application) -> None:
+    svc = app.bot_data.get('council_service')
+    if svc:
+        await svc.stop()
+        svc.store.close()
+    for extra in app.bot_data.get('council_bots') or []:
+        try:
+            await extra.shutdown()
+        except Exception:
+            pass
     client = app.bot_data.get('client')
     if client:
         await client.aclose()
@@ -753,6 +817,8 @@ def register_handlers(app: Application, role: str) -> None:
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_codex))
         app.add_handler(MessageHandler(filters.Document.ALL & ~filters.Document.IMAGE, handle_document))
     else:
+        if role == 'deepseek':
+            council_cmds.register(app)
         app.add_handler(CommandHandler('ask', handle_text))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
@@ -760,27 +826,25 @@ def register_handlers(app: Application, role: str) -> None:
 def main() -> None:
     os.umask(0o077)
     config = load_config()
-    (ROOT / 'logs').mkdir(exist_ok=True)
-    # 第三方日志可能带 Bot token URL；仅输出自己的无正文事件日志。
-    logging.getLogger().addHandler(logging.NullHandler())
-    handler = RotatingFileHandler(ROOT / 'logs/bot.log', maxBytes=1_000_000, backupCount=2, encoding='utf-8')
-    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
-    log.addHandler(handler)
-    log.setLevel(logging.INFO)
-    log.propagate = False
-    with (ROOT / 'logs/bot.lock').open('w') as lock:
+    setup_logging(log, LOG_DIR, config.role)
+    if watchdog.standby_active():
+        # 手机备份正在运行（之前检测到 Token 冲突）：不收消息，等主人执行 council resume
+        print('Mini PC 处于让位（standby）状态：手机备份在运行。确认手机已停止后执行 council resume。')
+        raise SystemExit(watchdog.STANDBY_EXIT)
+    with (LOG_DIR / 'bot.lock').open('w') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             print('Bot 已在运行。')
             return
-        pid_file = ROOT / 'logs/bot.pid'
+        pid_file = LOG_DIR / 'bot.pid'
         pid_file.write_text(str(os.getpid()))
         app = (Application.builder().token(config.token)
                .connect_timeout(10).read_timeout(15).write_timeout(15)
                .get_updates_connect_timeout(10).get_updates_read_timeout(40)
                .post_init(ready).post_shutdown(shutdown).build())
         app.bot_data.update(config=config, last_request={})
+        watchdog.install(app, config.role)
         register_handlers(app, config.role)
         app.add_error_handler(handle_error)
         try:
@@ -791,14 +855,15 @@ def main() -> None:
             app.run_polling(timeout=25, allowed_updates=['message'], drop_pending_updates=True, bootstrap_retries=-1)
         finally:
             pid_file.unlink(missing_ok=True)
-            wake_unlock = ROOT.parent.parent / 'usr/bin/termux-wake-unlock'
-            if wake_unlock.exists():
-                subprocess.run([str(wake_unlock)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if watchdog.standby_active():
+            raise SystemExit(watchdog.STANDBY_EXIT)   # 让 systemd 不要自动重启（RestartPreventExitStatus）
 
 
 if __name__ == '__main__':
     try:
         main()
+    except SystemExit:
+        raise
     except Exception as error:
         print('启动失败：' + type(error).__name__ + '；请检查 .env 和网络。')
         raise SystemExit(1) from None
