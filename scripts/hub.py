@@ -96,7 +96,7 @@ def page() -> str:
     rows = []
     for role, unit in UNITS.items():
         status, text = monitor.role_health(role) if (monitor.RUNTIME / role / '.env').exists() else ('none', f'{role}：未配置')
-        color = {'ok': 'ok', 'standby': 'warn', 'none': 'muted'}.get(status, 'bad')
+        color = {'ok': 'ok', 'standby': 'warn', 'stopped': 'warn', 'none': 'muted'}.get(status, 'bad')
         rows.append(f'<li class="{color}"><span>{esc(text)}</span>'
                     f'<form method="post"><input type="hidden" name="unit" value="{unit}">'
                     f'<button name="action" value="restart">重启</button></form></li>')
@@ -150,6 +150,10 @@ def run_action(action: str, unit: str = '') -> None:
         action = 'restart'
     if action == 'start' and monitor.STANDBY_FILE.exists():
         return
+    if action == 'stop' and not unit:
+        monitor.MANUAL_STOP.write_text(str(int(time.time())))
+    elif action in ('start', 'restart'):
+        monitor.MANUAL_STOP.unlink(missing_ok=True)
     subprocess.run(['systemctl', '--user', action, *units], timeout=90)
 
 

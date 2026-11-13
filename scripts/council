@@ -47,10 +47,13 @@ case "$cmd" in
     if [ -f "$HOME_DIR/data/standby.json" ]; then
       echo "Mini PC 处于让位状态（手机备份在运行）。确认手机上的机器人已停止后，用：council resume"; exit 1
     fi
+    rm -f "$HOME_DIR/data/manual-stop"
     "${SC[@]}" start "${UNITS[@]}"; echo "已启动。查看：council status" ;;
   stop)
+    mkdir -p "$HOME_DIR/data"; date +%s > "$HOME_DIR/data/manual-stop"   # 监控看到这个文件就不自动拉起
     "${SC[@]}" stop "${UNITS[@]}"; echo "已停止全部三个机器人（开机仍会自动启动；要彻底关闭用 systemctl --user disable）。" ;;
   restart)
+    rm -f "$HOME_DIR/data/manual-stop"
     "${SC[@]}" restart "${UNITS[@]}"; echo "已重启。" ;;
   status)
     for u in "${UNITS[@]}"; do
@@ -71,7 +74,7 @@ case "$cmd" in
     echo "== systemd（最近 30 行）"
     journalctl --user -u ai-council -u ai-council-claude -u ai-council-codex -n 30 --no-pager 2>/dev/null || true ;;
   resume)
-    rm -f "$HOME_DIR/data/standby.json"
+    rm -f "$HOME_DIR/data/standby.json" "$HOME_DIR/data/manual-stop"
     "${SC[@]}" restart "${UNITS[@]}"
     echo "Mini PC 已重新接管。如果手机上的机器人还在运行，几分钟内会再次自动让位。" ;;
   setup)

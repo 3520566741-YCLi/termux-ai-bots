@@ -27,6 +27,7 @@ ROLES = {'deepseek': ('ai-council', 'DeepSeek'), 'claude': ('ai-council-claude',
 HEARTBEAT_STALE = 180
 STATE_FILE = DATA / 'monitor-state.json'
 STANDBY_FILE = DATA / 'standby.json'
+MANUAL_STOP = DATA / 'manual-stop'   # council stop / 网页“全部停止”写入：手动停的不自动拉起
 # 估算价格（每百万 token）。和服务商实际价格可能不同：在 runtime/pricing.json 里改成你的实际价格。
 DEFAULT_PRICING = {
     'DeepSeek': {'currency': '¥', 'in': 2.0, 'out': 8.0},
@@ -107,6 +108,8 @@ def role_health(role: str) -> tuple:
     age = heartbeat_age(role)
     if STANDBY_FILE.exists():
         return 'standby', f'{name}：让位中（手机备份在运行）'
+    if MANUAL_STOP.exists() and state != 'active':
+        return 'stopped', f'{name}：已手动停止'
     if state != 'active':
         return 'down', f'{name}：服务没有运行（{state}）'
     if age is None or age > HEARTBEAT_STALE:
