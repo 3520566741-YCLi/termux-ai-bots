@@ -10,6 +10,7 @@
 #   council bind                       开放 30 分钟 Codex 主人绑定，显示 6 位绑定码
 #   council codex-login                重新登录 Codex（ChatGPT 订阅，设备码方式）
 #   council codex-status               Codex 是否已登录
+#   council hub-url                    状态网页的链接（只在 Tailscale 内网能打开）
 #   council test                       运行离线测试
 #   council backup                     立即备份（数据库 + 配置，保留 14 天）
 #   council restore <备份文件>          从备份恢复（会先停止服务）
@@ -23,6 +24,7 @@ PY="$HOME_DIR/.venv/bin/python"
 CODEX="$HOME_DIR/tools/codex/pkg/bin/codex"
 UNITS=(ai-council ai-council-claude ai-council-codex)
 TIMERS=(ai-council-monitor.timer ai-council-report.timer ai-council-backup.timer)
+EXTRA=(ai-council-hub)
 SC=(systemctl --user)
 
 export AI_CLAUDE_ROOT="$HOME_DIR/runtime/claude" AI_CODEX_ROOT="$HOME_DIR/runtime/codex" \
@@ -86,6 +88,8 @@ case "$cmd" in
     "$CODEX" -c 'cli_auth_credentials_store="file"' login --device-auth
     "${SC[@]}" restart ai-council-codex 2>/dev/null || true
     echo "登录完成。主持机器人会在 10 分钟内自动检测到 Codex 恢复（或 council restart 立即生效）。" ;;
+  hub-url)
+    "$PY" "$HOME_DIR/scripts/hub.py" url ;;
   codex-status)
     if "$CODEX" -c 'cli_auth_credentials_store="file"' login status >/dev/null 2>&1; then echo "Codex：已登录"; else echo "Codex：未登录（council codex-login）"; exit 1; fi ;;
   test)
@@ -121,8 +125,9 @@ case "$cmd" in
     done
     ln -sf "$HOME_DIR/scripts/council" "$HOME/.local/bin/council"
     "${SC[@]}" daemon-reload
-    "${SC[@]}" enable "${UNITS[@]}" "${TIMERS[@]}"
+    "${SC[@]}" enable "${UNITS[@]}" "${TIMERS[@]}" "${EXTRA[@]}"
     "${SC[@]}" start "${TIMERS[@]}"
+    "${SC[@]}" restart "${EXTRA[@]}"
     loginctl show-user "$USER" -p Linger | grep -q yes || echo "提示：需要 sudo loginctl enable-linger $USER 才能不登录桌面也自动运行"
     echo "已安装（开机自启）。启动：council start" ;;
   update)
