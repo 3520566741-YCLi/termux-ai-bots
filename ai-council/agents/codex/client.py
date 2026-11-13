@@ -16,6 +16,7 @@ import fcntl
 import os
 import time
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -143,6 +144,23 @@ def hidden_binds(empty: Path, files_dir: Optional[Path] = None) -> list:
     return binds
 
 
+_BWRAP_OK: Optional[bool] = None
+
+
+def bwrap_works() -> bool:
+    """bwrap 装了而且真能用。Ubuntu 24.04 默认限制非特权用户命名空间（AppArmor），
+    没给 bwrap 配置文件时会报 "setting up uid map: Permission denied"，这时退回只用 Codex 自己的沙箱。"""
+    global _BWRAP_OK
+    if _BWRAP_OK is None:
+        path = shutil.which('bwrap')
+        try:
+            _BWRAP_OK = bool(path) and subprocess.run([path, '--dev-bind', '/', '/', 'true'], capture_output=True,
+                                                      timeout=10).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            _BWRAP_OK = False
+    return _BWRAP_OK
+
+
 def bwrap_args(empty: Path, files_dir: Optional[Path] = None) -> list:
     """bubblewrap 版的 hidden_binds：整个系统照常可见，只把同样那些路径挂成空。不存在的路径跳过。"""
     args = ['bwrap', '--dev-bind', '/', '/', '--die-with-parent']
@@ -182,7 +200,7 @@ class CodexAgent:
         self.toolkit = toolkit
         # use_proot=False 表示不套外层隔离（测试用）；True 时优先 proot（Termux），其次 bwrap（Linux）
         self.use_proot = use_proot and shutil.which('proot') is not None
-        self.use_bwrap = use_proot and not self.use_proot and shutil.which('bwrap') is not None
+        self.use_bwrap = use_proot and not self.use_proot and bwrap_works()
         self.timeout = timeout
         self.lock = asyncio.Lock()
         self.file_lock = FileLock(lock_path or LOCK_PATH)
