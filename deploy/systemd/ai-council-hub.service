@@ -1,0 +1,14 @@
+[Unit]
+Description=AI Council 状态网页（只在 Tailscale 内网可访问）
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=%h/ai-council/.venv/bin/python %h/ai-council/scripts/hub.py
+Restart=always
+# Tailscale 还没就绪时会退出，10 秒后重试
+RestartSec=10
+UMask=0077
+
+[Install]
+WantedBy=default.target

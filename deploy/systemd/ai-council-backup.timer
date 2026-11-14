@@ -1,0 +1,9 @@
+[Unit]
+Description=每天 04:30 备份 AI Council
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

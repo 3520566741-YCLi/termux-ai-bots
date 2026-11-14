@@ -13,7 +13,8 @@ from agents.base import Reply
 from agents.claude.client import ClaudeAgent
 from agents.deepseek.client import DeepSeekAgent
 from agents.tools import SKIPPED, Toolkit
-from config import CLAUDE_API, CLAUDE_MODEL, Config
+from config import CLAUDE_API, Config
+CLAUDE_MODEL = 'test-claude-model'
 from gateway.telegram import bot
 from orchestrator.council import Council
 

@@ -1,0 +1,36 @@
+[Unit]
+Description=AI Council Claude 机器人
+After=network-online.target
+Wants=network-online.target
+PartOf=ai-council.service
+# 不限制重启次数：崩溃多少次都继续拉起
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+WorkingDirectory=%h/ai-council/ai-council
+Environment=AI_CLAUDE_ROOT=%h/ai-council/runtime/claude
+Environment=AI_CODEX_ROOT=%h/ai-council/runtime/codex
+Environment=AI_COUNCIL_DATA=%h/ai-council/data
+Environment=AI_TOOLS_DIR=%h/ai-council/runtime/tools
+Environment=CODEX_BIN=%h/ai-council/tools/codex/pkg/bin/codex
+Environment=PYTHONUNBUFFERED=1
+Environment=AI_BOT_ROOT=%h/ai-council/runtime/claude
+Environment=AI_LOG_DIR=%h/ai-council/logs/claude
+ExecStart=%h/ai-council/.venv/bin/python -m gateway.telegram.bot
+Restart=always
+RestartSec=5
+# 事件循环卡住 90 秒没心跳 → systemd 强制重启
+WatchdogSec=90
+# 开机时没网会一直等 Telegram；5 分钟还没就绪就重启再等
+TimeoutStartSec=300
+TimeoutStopSec=30
+# 退出码 75 = 检测到手机备份在运行，主动让位：不自动重启，等 council resume
+SuccessExitStatus=75
+RestartPreventExitStatus=75
+UMask=0077
+Nice=5
+
+[Install]
+WantedBy=default.target

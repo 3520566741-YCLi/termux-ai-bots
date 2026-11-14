@@ -179,7 +179,7 @@ class RoleSplitTest(unittest.IsolatedAsyncioTestCase):
 
     def test_bots_are_separate(self):
         deepseek, codex = self.commands('deepseek'), self.commands('codex')
-        self.assertEqual(deepseek, {'ask', 'new', 'discuss'})
+        self.assertEqual(deepseek, {'ask', 'new', 'discuss', 'debate', 'rounds', 'more', 'final', 'status', 'cancel', 'mode'})
         self.assertTrue({'ask', 'code', 'codexbind', 'new'} <= codex)
 
     def test_role_validation(self):

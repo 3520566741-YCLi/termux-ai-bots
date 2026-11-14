@@ -17,6 +17,7 @@ from typing import Optional, Sequence
 import httpx
 
 from agents.base import Image, Reply
+from agents.http import post_json
 from agents.tools import MAX_CALLS_PER_ROUND, SKIPPED, Toolkit
 from config import Config, REQUEST_TIMEOUT
 
@@ -63,15 +64,11 @@ class ClaudeAgent:
         }
         if tools:
             body['tools'] = tools
-        response = await self.client.post(
-            self.config.base_url,
+        return await post_json(
+            self.client, self.config.base_url,
             headers={'x-api-key': self.config.key, 'anthropic-version': API_VERSION,
                      'anthropic-beta': FALLBACK_BETA, 'content-type': 'application/json'},
-            json=body,
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        return response.json()
+            json=body, timeout=REQUEST_TIMEOUT, label='claude')
 
     async def respond(self, text: str, history: Sequence[dict] = (), image: Optional[Image] = None,
                       allow_tools: bool = False, notion: str = '') -> Reply:

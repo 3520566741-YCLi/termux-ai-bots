@@ -193,9 +193,12 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                     load_config()
                 path = root / '.env'
                 path.write_text('TELEGRAM_BOT_TOKEN=test\nDEEPSEEK_API_KEY=test\nALLOWED_CHAT_IDS=-123\n')
+                with self.assertRaises(ValueError):
+                    load_config()                       # 没写 DEEPSEEK_MODEL：模型名不写死
+                path.write_text('TELEGRAM_BOT_TOKEN=test\nDEEPSEEK_API_KEY=test\nALLOWED_CHAT_IDS=-123\nDEEPSEEK_MODEL=m\n')
                 self.assertEqual(load_config().chats, frozenset({-123}))
                 for value in ['', 'abc', '0', '-123,']:
-                    path.write_text('TELEGRAM_BOT_TOKEN=test\nDEEPSEEK_API_KEY=test\nALLOWED_CHAT_IDS=' + value)
+                    path.write_text('TELEGRAM_BOT_TOKEN=test\nDEEPSEEK_API_KEY=test\nDEEPSEEK_MODEL=m\nALLOWED_CHAT_IDS=' + value)
                     with self.assertRaises(ValueError):
                         load_config()
 

@@ -11,3 +11,12 @@ codex_bind_window
 codex_code.json
 *.mo
 *.so
+# Mini PC 部署：运行时数据、密钥、日志、下载的工具都不进 Git
+/runtime/
+/data/
+/logs/
+/tools/
+/backups/
+*.db
+*.db-wal
+*.db-shm

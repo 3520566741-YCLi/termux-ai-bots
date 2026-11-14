@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# AI Council 管理命令（Mini PC）。装好后可直接输入 council（~/.local/bin/council 是指向这里的链接）。
+#
+#   council start | stop | restart     启动 / 停止 / 重启全部三个机器人
+#   council status                     服务状态 + 心跳 + 今日用量
+#   council logs [deepseek|claude|codex] [-f]   看日志（默认主持机器人，-f 持续跟踪）
+#   council errors                     最近的错误日志（三个机器人）
+#   council resume                     手机备份停掉后，让 Mini PC 重新接管（清除让位状态并启动）
+#   council setup                      第一次配置：逐个输入 Telegram Token / API Key（输入不显示）
+#   council bind                       开放 30 分钟 Codex 主人绑定，显示 6 位绑定码
+#   council codex-login                重新登录 Codex（ChatGPT 订阅，设备码方式）
+#   council codex-status               Codex 是否已登录
+#   council hub-url                    状态网页的链接（只在 Tailscale 内网能打开）
+#   council test                       运行离线测试
+#   council backup                     立即备份（数据库 + 配置，保留 14 天）
+#   council restore <备份文件>          从备份恢复（会先停止服务）
+#   council install                    安装 / 更新 systemd 服务和定时器（开机自启）
+#   council update                     从 GitHub 拉取当前分支的最新代码、装依赖、跑测试、重启
+set -euo pipefail
+
+HOME_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+APP="$HOME_DIR/ai-council"
+PY="$HOME_DIR/.venv/bin/python"
+CODEX="$HOME_DIR/tools/codex/pkg/bin/codex"
+UNITS=(ai-council ai-council-claude ai-council-codex)
+TIMERS=(ai-council-monitor.timer ai-council-report.timer ai-council-backup.timer)
+EXTRA=(ai-council-hub)
+SC=(systemctl --user)
+
+export AI_CLAUDE_ROOT="$HOME_DIR/runtime/claude" AI_CODEX_ROOT="$HOME_DIR/runtime/codex" \
+       AI_COUNCIL_DATA="$HOME_DIR/data" AI_TOOLS_DIR="$HOME_DIR/runtime/tools" CODEX_BIN="$CODEX"
+
+role_unit() {
+  case "${1:-deepseek}" in
+    deepseek|ds|host) echo ai-council ;;
+    claude) echo ai-council-claude ;;
+    codex) echo ai-council-codex ;;
+    *) echo "未知角色：$1（deepseek / claude / codex）" >&2; exit 2 ;;
+  esac
+}
+
+role_name() { case "$1" in ai-council) echo deepseek ;; ai-council-claude) echo claude ;; ai-council-codex) echo codex ;; esac; }
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  start)
+    if [ -f "$HOME_DIR/data/standby.json" ]; then
+      echo "Mini PC 处于让位状态（手机备份在运行）。确认手机上的机器人已停止后，用：council resume"; exit 1
+    fi
+    rm -f "$HOME_DIR/data/manual-stop"
+    "${SC[@]}" start "${UNITS[@]}"; echo "已启动。查看：council status" ;;
+  stop)
+    mkdir -p "$HOME_DIR/data"; date +%s > "$HOME_DIR/data/manual-stop"   # 监控看到这个文件就不自动拉起
+    "${SC[@]}" stop "${UNITS[@]}"; echo "已停止全部三个机器人（开机仍会自动启动；要彻底关闭用 systemctl --user disable）。" ;;
+  restart)
+    rm -f "$HOME_DIR/data/manual-stop"
+    "${SC[@]}" restart "${UNITS[@]}"; echo "已重启。" ;;
+  status)
+    for u in "${UNITS[@]}"; do
+      printf '%-20s %s\n' "$u" "$("${SC[@]}" is-active "$u" 2>/dev/null || true)"
+    done
+    [ -f "$HOME_DIR/data/standby.json" ] && echo "⚠️ 让位中：手机备份在运行（council resume 恢复）"
+    echo
+    "$PY" "$HOME_DIR/scripts/monitor.py" status ;;
+  logs)
+    role="${1:-deepseek}"; [ "$role" = "-f" ] && role=deepseek
+    file="$HOME_DIR/logs/$(role_name "$(role_unit "$role")")/app.log"
+    if [[ " $* " == *" -f "* ]]; then tail -n 50 -F "$file"; else tail -n 80 "$file"; fi ;;
+  errors)
+    for r in deepseek claude codex; do
+      f="$HOME_DIR/logs/$r/error.log"; [ -f "$f" ] || continue
+      echo "== $r"; tail -n 20 "$f"
+    done
+    echo "== systemd（最近 30 行）"
+    journalctl --user -u ai-council -u ai-council-claude -u ai-council-codex -n 30 --no-pager 2>/dev/null || true ;;
+  resume)
+    rm -f "$HOME_DIR/data/standby.json" "$HOME_DIR/data/manual-stop"
+    "${SC[@]}" restart "${UNITS[@]}"
+    echo "Mini PC 已重新接管。如果手机上的机器人还在运行，几分钟内会再次自动让位。" ;;
+  setup)
+    exec "$HOME_DIR/scripts/setup_secrets.sh" ;;
+  bind)
+    cd "$HOME_DIR/runtime/codex" && umask 077
+    code=$(printf '%06d' $(( $(od -An -N4 -tu4 /dev/urandom | tr -d ' ') % 1000000 )))
+    printf '{"code": "%s", "expires": %s}\n' "$code" "$(( $(date +%s) + 1800 ))" > codex_bind_window.tmp
+    mv -f codex_bind_window.tmp codex_bind_window
+    echo "30 分钟内在 Telegram 给 Codex 机器人发：/codexbind $code" ;;
+  codex-login)
+    echo "按提示在手机或电脑浏览器打开链接、登录 ChatGPT、输入验证码。"
+    echo "（如果提示需要开启“设备代码登录”，先去 ChatGPT 设置 → 安全里打开。）"
+    "$CODEX" -c 'cli_auth_credentials_store="file"' login --device-auth
+    "${SC[@]}" restart ai-council-codex 2>/dev/null || true
+    echo "登录完成。主持机器人会在 10 分钟内自动检测到 Codex 恢复（或 council restart 立即生效）。" ;;
+  hub-url)
+    "$PY" "$HOME_DIR/scripts/hub.py" url ;;
+  codex-status)
+    if "$CODEX" -c 'cli_auth_credentials_store="file"' login status >/dev/null 2>&1; then echo "Codex：已登录"; else echo "Codex：未登录（council codex-login）"; exit 1; fi ;;
+  test)
+    cd "$APP" && "$PY" -m unittest discover -s tests ;;
+  backup)
+    dest="$HOME_DIR/backups"; mkdir -p "$dest"; chmod 700 "$dest"; umask 077
+    stamp=$(date +%Y%m%d-%H%M%S); tmp=$(mktemp -d)
+    if [ -f "$HOME_DIR/data/council.db" ]; then
+      "$PY" -c "import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()" \
+        "$HOME_DIR/data/council.db" "$tmp/council.db"
+    fi
+    tar -C "$HOME_DIR" --exclude='runtime/*/logs' -cf "$tmp/runtime.tar" runtime 2>/dev/null || true
+    tar -C "$tmp" -czf "$dest/ai-council-$stamp.tar.gz" .
+    rm -rf "$tmp"
+    find "$dest" -name 'ai-council-*.tar.gz' -mtime +14 -delete
+    echo "备份完成：$dest/ai-council-$stamp.tar.gz（含 .env 密钥，权限 600，请勿外传）" ;;
+  restore)
+    file="${1:?用法：council restore <备份文件>}"
+    [ -f "$file" ] || { echo "找不到 $file"; exit 1; }
+    read -r -p "恢复会覆盖当前的数据库和配置（先自动备份一份当前状态）。继续？[y/N] " yn
+    [ "$yn" = y ] || exit 1
+    "$0" backup
+    "${SC[@]}" stop "${UNITS[@]}" || true
+    tmp=$(mktemp -d); tar -C "$tmp" -xzf "$file"
+    [ -f "$tmp/council.db" ] && { mkdir -p "$HOME_DIR/data"; cp "$tmp/council.db" "$HOME_DIR/data/council.db"; rm -f "$HOME_DIR/data/council.db-wal" "$HOME_DIR/data/council.db-shm"; }
+    [ -f "$tmp/runtime.tar" ] && tar -C "$HOME_DIR" -xf "$tmp/runtime.tar"
+    rm -rf "$tmp"
+    "${SC[@]}" start "${UNITS[@]}"; echo "已恢复并重启。" ;;
+  install)
+    mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/bin" "$HOME_DIR/data" "$HOME_DIR/logs"
+    for f in "$HOME_DIR"/deploy/systemd/*.service "$HOME_DIR"/deploy/systemd/*.timer; do
+      ln -sf "$f" "$HOME/.config/systemd/user/$(basename "$f")"
+    done
+    ln -sf "$HOME_DIR/scripts/council" "$HOME/.local/bin/council"
+    "${SC[@]}" daemon-reload
+    "${SC[@]}" enable "${UNITS[@]}" "${TIMERS[@]}" "${EXTRA[@]}"
+    "${SC[@]}" start "${TIMERS[@]}"
+    "${SC[@]}" restart "${EXTRA[@]}"
+    loginctl show-user "$USER" -p Linger | grep -q yes || echo "提示：需要 sudo loginctl enable-linger $USER 才能不登录桌面也自动运行"
+    echo "已安装（开机自启）。启动：council start" ;;
+  update)
+    cd "$HOME_DIR" && git pull --ff-only
+    "$HOME_DIR/.venv/bin/pip" install -q -r "$APP/requirements.txt"
+    (cd "$APP" && "$PY" -m unittest discover -s tests >/dev/null 2>&1) || { echo "测试没通过，没有重启。council test 看详情"; exit 1; }
+    "${SC[@]}" restart "${UNITS[@]}"; echo "已更新并重启。" ;;
+  help|-h|--help|*)
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

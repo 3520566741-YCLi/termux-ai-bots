@@ -15,7 +15,8 @@ from agents.codex.client import MCP_SCRIPT, CodexAgent
 from agents.deepseek.client import DeepSeekAgent
 from agents.tool_gateway import ToolGateway
 from agents.tools import Toolkit
-from config import CLAUDE_API, CLAUDE_MODEL, Config
+from config import CLAUDE_API, Config
+CLAUDE_MODEL = 'test-claude-model'
 
 KEYS = {'GITHUB_TOKEN': 'github_pat_x', 'TAVILY_API_KEY': 'tvly-x'}
 

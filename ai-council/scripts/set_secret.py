@@ -67,8 +67,8 @@ def target_env(field: str, instance: Optional[str]) -> Path:
     if not instance:
         raise SystemExit('请用 --instance 指定实例目录，例如 --instance ~/ai-claude / Use --instance ~/ai-claude')
     root = Path(os.path.expanduser(instance))
-    if not (root / 'start.sh').exists():
-        raise SystemExit(f'{root} 不像实例目录（没有 start.sh）/ not an instance dir (no start.sh)')
+    if not ((root / 'start.sh').exists() or (root / '.env').exists()):
+        raise SystemExit(f'{root} 不像实例目录（没有 start.sh 或 .env）/ not an instance dir (no start.sh or .env)')
     return root / '.env'
 
 
