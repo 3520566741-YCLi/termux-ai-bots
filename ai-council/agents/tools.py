@@ -19,6 +19,8 @@ from urllib.parse import quote
 import httpx
 from dotenv import dotenv_values
 
+from agents.web import WebError, search_ddgs
+
 TOOLS_ENV = Path(os.path.expanduser(os.environ.get('AI_TOOLS_DIR', '~/.config/ai-tools'))) / '.env'
 GITHUB_API = 'https://api.github.com'
 TAVILY_API = 'https://api.tavily.com/search'
@@ -203,12 +205,30 @@ class Toolkit:
         items = data.get('items') or []
         return '\n'.join(f"{i['repository']['full_name']}: {i['path']}" for i in items) or '没有找到'
 
-    # ---------- Tavily 网页搜索 ----------
+    # ---------- 网页搜索：优先 Tavily，失败或没配时用免密钥的 ddgs 兜底 ----------
+
+    async def search(self, query) -> str:
+        """给 /search 用：失败抛 WebError，文字可以直接告诉用户。"""
+        try:
+            return await self._web_search(query)
+        except ToolError as error:
+            raise WebError(str(error)) from None
 
     async def _web_search(self, query) -> str:
         query = str(query or '').strip()
         if not query:
             raise ToolError('query 不能为空')
+        if self.tavily_key:
+            try:
+                return await self._tavily(query)
+            except (ToolError, httpx.HTTPError, ValueError):
+                pass
+        try:
+            return await search_ddgs(query)
+        except WebError as error:
+            raise ToolError(str(error)) from None
+
+    async def _tavily(self, query: str) -> str:
         response = await self.client.post(TAVILY_API, timeout=TIMEOUT,
                                           headers={'Authorization': 'Bearer ' + self.tavily_key},
                                           json={'query': query, 'max_results': 5, 'search_depth': 'basic'})

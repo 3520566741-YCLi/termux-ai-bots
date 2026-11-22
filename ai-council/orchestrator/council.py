@@ -7,6 +7,8 @@ from typing import Optional
 from agents.base import Agent, Image, Reply
 from config import HISTORY_ANSWER_CHARS, HISTORY_CHARS, HISTORY_TTL, HISTORY_TURNS
 
+EXTERNAL_NOTE = '（这一轮根据外部网页或搜索结果回答过，内容没有保留。需要的话请主人重新发链接或搜索。）'
+
 
 class Council:
     """目前只转发给一个 agent；按聊天保存最近几轮问答作为对话记忆。
@@ -63,6 +65,17 @@ class Council:
         reply = await self.agent.respond(text, tuple(history), image, allow_tools=True, notion=notion)
         # 记忆里只留文字，不重复上传图片。
         self.remember(chat_id, f'[图片] {text}' if image else text, reply.text)
+        return reply
+
+    async def respond_external(self, chat_id: int, text: str, external: str) -> Reply:
+        """带网页或搜索内容回答：不给工具、不带历史，网页里的提示注入既拿不到私人数据也发不出去。
+
+        记忆里只留主人的原话和一句说明，不留模型回答，免得外部内容混进之后带工具的对话。"""
+        today = time.strftime('%Y-%m-%d', time.localtime(self.clock()))
+        prompt = (f'今天是 {today}。资料之间有冲突时，优先采用官方来源和日期最新的内容，不确定就说明。\n\n'
+                  f'{external}\n\n主人的问题：{text}')
+        reply = await self.agent.respond(prompt, (), None, allow_tools=False)
+        self.remember(chat_id, text, EXTERNAL_NOTE)
         return reply
 
     def remember(self, chat_id: int, user_text: str, answer: str, answer_chars: int = HISTORY_ANSWER_CHARS) -> None:

@@ -152,6 +152,14 @@ bubblewrap 无法使用，所以外层隔离和 Codex 自带的沙箱目前都�
   备份里有密钥，请勿外传；需要异地备份时自己加密后再拷走。Codex 登录不在备份里（重新 `council codex-login` 即可）。
 - 恢复：`council restore backups/ai-council-时间.tar.gz`（先自动备份当前状态，停服务，恢复，再启动）。
 
+## 读网页和联网搜索
+
+- 主人给机器人发带 `http(s)` 链接的消息，DeepSeek 和 Claude 会先读网页正文再回答，例如：`总结一下 https://example.com/article`（一次最多读 2 个链接）。
+- `/search 关键词`：搜索后回答并列出链接。群里默认 DeepSeek 回答，`/search@机器人用户名 关键词` 指定机器人。优先用 Tavily，失败时用免密钥的 ddgs。
+- 安全限制：只读公网的 http/https（80、443 端口），拦截本机、局域网、Tailscale，重定向每一跳都检查；只有主人能用。
+- 带网页内容的这一轮不给工具、不带对话记忆，也不把回答存进记忆，所以追问时要重新发链接。
+- 依赖在 `ai-council/requirements-web.txt`，没装时机器人照常运行，只是这两个功能提示不可用。
+
 ## 给 AI 助手的说明
 
 改代码前后都运行 `council test`（离线，不需要密钥和网络）。日志不得包含消息正文或密钥；
