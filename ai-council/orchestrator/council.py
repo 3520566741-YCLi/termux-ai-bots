@@ -71,7 +71,10 @@ class Council:
         """带网页或搜索内容回答：不给工具、不带历史，网页里的提示注入既拿不到私人数据也发不出去。
 
         记忆里只留主人的原话和一句说明，不留模型回答，免得外部内容混进之后带工具的对话。"""
-        reply = await self.agent.respond(f'{external}\n\n主人的问题：{text}', (), None, allow_tools=False)
+        today = time.strftime('%Y-%m-%d', time.localtime(self.clock()))
+        prompt = (f'今天是 {today}。资料之间有冲突时，优先采用官方来源和日期最新的内容，不确定就说明。\n\n'
+                  f'{external}\n\n主人的问题：{text}')
+        reply = await self.agent.respond(prompt, (), None, allow_tools=False)
         self.remember(chat_id, text, EXTERNAL_NOTE)
         return reply
 

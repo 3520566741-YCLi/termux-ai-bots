@@ -184,6 +184,7 @@ class ExternalTurnTest(unittest.TestCase):
         self.assertFalse(call.allow_tools)
         self.assertEqual(tuple(call.history), ())
         self.assertIn('<网页内容>', call.text)
+        self.assertIn('今天是 20', call.text)
         turns = council.history(1)
         self.assertEqual(turns[-1]['content'], EXTERNAL_NOTE)
         self.assertNotIn('网页内容', ''.join(t['content'] for t in turns))
