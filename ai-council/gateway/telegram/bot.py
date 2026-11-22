@@ -11,7 +11,7 @@ import time
 from typing import Optional
 
 import httpx
-from telegram import Bot, Update
+from telegram import Bot, LinkPreviewOptions, Update
 from telegram.error import Conflict, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -20,6 +20,7 @@ from agents.claude.client import ClaudeAgent, ClaudeRefused
 from agents.codex.client import CodexAgent, CodexBusy
 from agents.codex.coder import CoderBusy, CoderError, CodexCoder
 from agents.files import MAX_FILE_BYTES, FileStore, FileStoreError
+from agents import web
 from agents.tools import Toolkit
 from agents.deepseek.client import DeepSeekAgent
 from config import (CLAUDE_ROOT, CODEX_BIND_WINDOW, CODEX_ROOT, CODEX_TIMEOUT, DATA_DIR, DEFAULT_IMAGE_PROMPT, LOG_DIR,
@@ -33,6 +34,7 @@ from orchestrator.discussion import (DEFAULT_ROUNDS, MAX_ROUNDS, PARTICIPANTS, D
 
 log = logging.getLogger('ai_council')
 AGENT_NAMES = {'deepseek': 'DeepSeek', 'claude': 'Claude', 'codex': 'Codex'}
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 def image_mime(data: bytes) -> Optional[str]:
@@ -181,7 +183,62 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not cooled_down(context, message.chat_id):
         await message.reply_text('请稍等几秒再提问。')
         return
-    await answer(message, context, text, owner=is_codex_owner(update), user_id=user_id(update))
+    owner = is_codex_owner(update)
+    # 只有主人发的链接才去抓取；没有链接的消息走原来的流程，完全不变
+    external = await read_links(message, text) if owner else ''
+    await answer(message, context, text, owner=owner, user_id=user_id(update), external=external)
+
+
+async def read_links(message, text: str) -> str:
+    """读消息里的链接，返回包好的外部内容；没有链接或都没读到时返回空。"""
+    urls = web.find_urls(text)
+    if not urls:
+        return ''
+    sent = await status(message, '正在读取链接…')
+    try:
+        pages, failures = await web.fetch_many(urls)
+    finally:
+        await clear_status(sent)
+    log.info('web_fetch chat=%s ok=%s failed=%s', message.chat_id, len(pages), len(failures))
+    if failures:
+        lines = '\n'.join(f'· {reason}' for _, reason in failures)
+        await message.reply_text(f'有 {len(failures)} 个链接没读到：\n{lines}', parse_mode=None,
+                                 link_preview_options=NO_PREVIEW)
+    return web.pages_block(pages) if pages else ''
+
+
+async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/search 关键词：只给主人。DeepSeek、Claude 用搜索结果回答；Codex 用它自带的联网搜索。"""
+    message = allowed(update, context)
+    if not message or not message.text or not my_turn(message, context):
+        return
+    if not is_codex_owner(update):
+        await message.reply_text('只有主人能用搜索。')
+        return
+    query = strip_command(message.text)
+    if not query:
+        await message.reply_text('用法：/search 关键词')
+        return
+    if len(query) > MAX_INPUT_CHARS:
+        await message.reply_text(f'问题过长，请控制在 {MAX_INPUT_CHARS} 字符内。')
+        return
+    if context.bot_data['config'].role == 'codex':
+        await start_codex(update, context, f'请联网搜索后回答：{query}')
+        return
+    if not cooled_down(context, message.chat_id):
+        await message.reply_text('请稍等几秒再提问。')
+        return
+    sent = await status(message, '正在搜索…')
+    try:
+        results = await context.bot_data['toolkit'].search(query)
+    except web.WebError as error:
+        log.warning('web_search_failed chat=%s', message.chat_id)
+        await message.reply_text(f'这次没搜到：{error}。稍后再试试。')
+        return
+    finally:
+        await clear_status(sent)
+    await answer(message, context, f'请根据搜索结果回答，并列出参考链接：{query}', owner=True, user_id=user_id(update),
+                 external=web.wrap_external(results, '搜索引擎'))
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -237,8 +294,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def answer(message, context: ContextTypes.DEFAULT_TYPE, text: str, image: Optional[Image] = None,
-                 owner: bool = False, user_id=None, counted: bool = False) -> None:
-    """owner=True 才给工具和记忆；非主人限次数（counted=True 表示调用方已经计过数）。"""
+                 owner: bool = False, user_id=None, counted: bool = False, external: str = '') -> None:
+    """owner=True 才给工具和记忆；非主人限次数（counted=True 表示调用方已经计过数）。
+
+    external：包好的网页或搜索内容。这一轮不给工具、不带历史，回复也不生成链接预览
+    （否则网页可以诱导模型输出带数据的链接，让 Telegram 去访问）。"""
     chat_id = message.chat_id
     now = time.monotonic()
     role = context.bot_data['config'].role
@@ -250,10 +310,10 @@ async def answer(message, context: ContextTypes.DEFAULT_TYPE, text: str, image: 
              int(owner))
     try:
         # 查 GitHub、上网搜索要多轮请求，总时间放宽到 3 倍
-        reply = await asyncio.wait_for(
-            context.bot_data['council'].respond(chat_id, text, image, allow_tools=owner,
-                                                notion=notion_level(role, owner, text)),
-            REQUEST_TIMEOUT * 3)
+        council = context.bot_data['council']
+        pending = council.respond_external(chat_id, text, external) if external else \
+            council.respond(chat_id, text, image, allow_tools=owner, notion=notion_level(role, owner, text))
+        reply = await asyncio.wait_for(pending, REQUEST_TIMEOUT * 3)
     except (asyncio.TimeoutError, httpx.TimeoutException):
         log.warning('%s_timeout chat=%s', role, chat_id)
         await message.reply_text(f'{name} 响应超时，请稍后重试。')
@@ -268,7 +328,8 @@ async def answer(message, context: ContextTypes.DEFAULT_TYPE, text: str, image: 
         log.warning('%s_error type=%s status=%s chat=%s', role, type(error).__name__, status, chat_id)
         await message.reply_text(f'{name} 暂时不可用，请检查网络、API key 或余额后重试。')
         return
-    await message.reply_text(limit_reply(reply.text), parse_mode=None)
+    await message.reply_text(limit_reply(reply.text), parse_mode=None,
+                             **({'link_preview_options': NO_PREVIEW} if external else {}))
     u = reply.usage
     # 只记 token 数字，供控制台估算费用；不记问题和回答正文。
     log.info('reply_sent chat=%s message=%s elapsed=%.1fs tokens_in=%s tokens_out=%s cache_hit=%s searches=%s',
@@ -809,6 +870,7 @@ def register_handlers(app: Application, role: str) -> None:
     """三个机器人分开：DeepSeek、Claude 做问答和看图；Codex 机器人只为主人服务（问答、/code、文件）。"""
     app.add_handler(CommandHandler('new', handle_new))
     app.add_handler(CommandHandler('discuss', handle_discuss))
+    app.add_handler(CommandHandler('search', handle_search))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
     if role == 'codex':
         app.add_handler(CommandHandler(['ask', 'codex'], handle_codex))

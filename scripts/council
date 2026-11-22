@@ -135,7 +135,7 @@ case "$cmd" in
     echo "已安装（开机自启）。启动：council start" ;;
   update)
     cd "$HOME_DIR" && git pull --ff-only
-    "$HOME_DIR/.venv/bin/pip" install -q -r "$APP/requirements.txt"
+    "$HOME_DIR/.venv/bin/pip" install -q -r "$APP/requirements.txt" -r "$APP/requirements-web.txt"
     (cd "$APP" && "$PY" -m unittest discover -s tests >/dev/null 2>&1) || { echo "测试没通过，没有重启。council test 看详情"; exit 1; }
     "${SC[@]}" restart "${UNITS[@]}"; echo "已更新并重启。" ;;
   help|-h|--help|*)
