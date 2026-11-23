@@ -140,7 +140,8 @@ class Engine:
         return len(results)
 
     # ---------- 推送 ----------
-    def should_push(self, it: dict, settings: dict, recent_pushed: list, now: float, events: set = frozenset()) -> bool:
+    def should_push(self, it: dict, settings: dict, recent_pushed: list, now: float, events: dict = None) -> bool:
+        events = events or {}
         if it.get('baseline') or it['score'] < int(settings['push_threshold']):
             return False
         if not it.get('matched') and it['score'] < int(settings['push_unwatched_min']):
@@ -149,36 +150,41 @@ class Engine:
             return False
         if now < float(settings.get('mute_until') or 0):
             return False
-        if it.get('event') and it['event'] in events:   # 同一件事只推一次
-            return False
+        if it.get('event') in events:
+            # 同一件事只推一次；除非升级（例如传闻 4 分 → 官方确认 5 分）
+            return it['score'] > events[it['event']]
         return not any(similar(p, it['title'], 0.5) or similar(p, it.get('summary') or '', 0.5) for p in recent_pushed)
 
     async def maybe_push(self, items: list, results: dict) -> None:
         now = time.time()
         with store.opened() as db:
             settings = store.get_settings(db)
-            pushed = db.execute('SELECT title, summary, event, pushed FROM items WHERE pushed > ?',
+            pushed = db.execute('SELECT title, summary, event, score, pushed FROM items WHERE pushed > ?',
                                 (now - DUP_WINDOW,)).fetchall()
-            events = {r['event'] for r in pushed if r['event']}
+            events: dict = {}   # 已推送事件 → 推过的最高分
+            for r in pushed:
+                if r['event']:
+                    events[r['event']] = max(events.get(r['event'], 0), r['score'] or 0)
             recent = [r['title'] for r in pushed] + [r['summary'] for r in pushed if r['summary']]
             last_hour = sum(1 for r in pushed if r['pushed'] > now - 3600)
         for it in sorted(items, key=lambda x: -results[x['id']]['score']):
             it = dict(it, **results[it['id']])
             if not self.should_push(it, settings, recent, now, events):
-                if it.get('event') and it['event'] in events:
+                if it.get('event') in events:
                     with store.opened() as db:   # 同一事件的后续报道算作“另有来源”
                         db.execute('UPDATE items SET confirms = confirms + 1 WHERE event=? AND pushed IS NOT NULL',
                                    (it['event'],))
                 continue
-            if last_hour >= int(settings['max_push_per_hour']):
+            if last_hour >= int(settings['max_push_per_hour']) and it['score'] < 5:
+                # 5 分不受上限限制；4 分超出上限的不推，但仍在网页信息流里
                 log.warning('push_skipped reason=hourly_cap item=%s', it['id'])
-                break
+                continue
             it['source_label'] = self.labels.get(it['source'], it['source'])
             await notify.push(self.client, self.env, it, list(settings['channels']))
             last_hour += 1
             recent.append(it['title'])
             if it.get('event'):
-                events.add(it['event'])
+                events[it['event']] = max(events.get(it['event'], 0), it['score'])
             with store.opened() as db:
                 db.execute('UPDATE items SET pushed=? WHERE id=?', (now, it['id']))
 

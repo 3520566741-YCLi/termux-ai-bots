@@ -186,7 +186,8 @@ def telegram_urls(channels: list) -> Callable:
     return lambda watch: [(f'https://t.me/s/{c}', {}) for c in channels if CHANNEL_RE.match(c)]
 
 
-DEFAULT_TG = ['WalterBloomberg', 'wublockchainenglish', 'tree_news_feed', 'unfolded']
+# 2026-11 在 Mini PC 上实测有更新的公开频道（C 级，传闻多）
+DEFAULT_TG = ['WalterBloomberg', 'WatcherGuru', 'BWEnews', 'wublockchainenglish', 'binance_announcements', 'unfolded']
 
 
 def build_sources(env: dict) -> list:
