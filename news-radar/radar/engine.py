@@ -198,27 +198,46 @@ class Engine:
                 db.execute('UPDATE items SET pushed=? WHERE id=?', (now, it['id']))
 
     def related(self, it: dict, now: float) -> list:
-        """过去 24 小时里和候选消息相关的旧消息（包括启动时的积压），给推送前检查用。"""
+        """过去 24 小时里和候选消息相关的旧消息（包括启动时的积压），给推送前检查用。
+
+        热门标的一天几百条，只取“最新 N 条”会漏掉最早的原始报道。所以先按相关度排：
+        同一事件 > 事件标识里的英文词命中（能跨语言找到英文原文）> 标题相似；再用最新的关键词命中补满。
+        """
         terms = [t for t in (it.get('matched') or '').split(',') + (it.get('tickers') or '').split(',') if t]
+        words = {w for w in (it.get('event') or '').split('-') if len(w) >= 4}
         with store.opened() as db:
             rows = [dict(r) for r in db.execute(
                 'SELECT id, title, summary, tier, published, matched, tickers, event, dup_of FROM items '
-                'WHERE fetched > ? AND id != ? ORDER BY id DESC LIMIT 3000', (now - 86400, it['id']))]
-        out = []
+                'WHERE fetched > ? AND id != ? AND (dup_of IS NULL OR dup_of != ?) ORDER BY id DESC LIMIT 4000',
+                (now - 86400, it['id'], it['id']))]
+        scored, keyword = [], []
         for r in rows:
-            if r['dup_of'] == it['id']:
-                continue
-            hay = ','.join([r['matched'], r['tickers']])
-            if (it.get('event') and r['event'] == it['event']) or any(t in hay for t in terms) \
-                    or similar(r['title'], it['title'], 0.35):
-                out.append(r)
-        return sorted(out, key=lambda r: r['published'])[-30:]
+            rel = 0.0
+            if it.get('event') and r['event'] == it['event']:
+                rel += 10
+            low = (r['title'] + ' ' + r['event']).lower()
+            hits = sum(1 for w in words if w in low)
+            if hits >= 2:
+                rel += hits
+            if similar(r['title'], it['title'], 0.35) or (it.get('summary') and r['summary']
+                                                         and similar(r['summary'], it['summary'], 0.4)):
+                rel += 2
+            if rel:
+                scored.append((rel, r))
+            elif any(t in (r['matched'] + ',' + r['tickers']) for t in terms):
+                keyword.append(r)
+        top = [r for _, r in sorted(scored, key=lambda x: -x[0])[:20]]
+        top += keyword[:30 - len(top)]
+        return sorted(top, key=lambda r: r['published'])
 
     async def passes_check(self, it: dict, now: float) -> bool:
         """推送前用 DeepSeek 再查一次：旧闻翻炒不推；有可靠来源报道的取消传闻标记。出错时照推。"""
         context = self.related(it, now)
-        if any(c['tier'] in ('A', 'B') and (c['dup_of'] == it['id'] or (it.get('event') and c['event'] == it['event']))
-               for c in context):
+        with store.opened() as db:   # 同一消息被 A/B 级来源重复报道过（去重时并进来的）
+            reliable_dup = db.execute('SELECT 1 FROM items WHERE dup_of=? AND tier IN ("A","B") LIMIT 1',
+                                      (it['id'],)).fetchone()
+        if reliable_dup or any(c['tier'] in ('A', 'B') and it.get('event') and c['event'] == it['event']
+                               for c in context):
             it['rumor'] = 0
         if not scorer.has_key(self.env):
             return True

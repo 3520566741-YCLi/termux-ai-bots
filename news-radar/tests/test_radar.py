@@ -184,5 +184,23 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(old['reason'], '旧闻')
 
 
+class RelatedTests(unittest.TestCase):
+    def test_finds_old_original_among_many(self):
+        store.init()
+        now = time.time()
+        with store.opened() as db:
+            base = dict(fp='x', body='', url='', market='crypto', tier='B', fetched=now - 3600, dup_of=None, baseline=1)
+            store.insert_item(db, dict(base, source='theblock', uid='orig', title='Cross River launches bitcoin-backed loans',
+                                       published=now - 4 * 3600, matched='比特币'))
+            for i in range(300):
+                store.insert_item(db, dict(base, source='x', uid=f'n{i}', title=f'比特币行情更新 {i}', published=now - 60,
+                                           matched='比特币'))
+        eng = engine.Engine({}, None, [])
+        ctx = eng.related({'id': -1, 'title': '跨河银行推出比特币贷款', 'matched': '比特币', 'tickers': 'BTC',
+                           'event': 'cross-river-bank-btc-backed-loan'}, now)
+        self.assertTrue(any('Cross River' in c['title'] for c in ctx))
+        self.assertLessEqual(len(ctx), 30)
+
+
 if __name__ == '__main__':
     unittest.main()
