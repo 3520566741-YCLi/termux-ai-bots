@@ -212,6 +212,8 @@ def build_sources(env: dict) -> list:
         Source('tg', 'Telegram 公开频道', 60, 'C', 'mixed', telegram_urls(tg), parse_telegram),
     ]
     disabled = {s.strip() for s in (env.get('RADAR_DISABLED_SOURCES') or '').split(',') if s.strip()}
+    if not env.get('RADAR_DISABLED_SOURCES'):
+        disabled = {'yahoo'}   # 雅虎从 Mini PC 一直 429，默认关闭
     for s in srcs:
         s.enabled = s.name not in disabled
     return srcs

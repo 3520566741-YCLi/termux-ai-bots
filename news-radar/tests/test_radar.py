@@ -104,7 +104,7 @@ class ScorerTests(unittest.TestCase):
         self.assertEqual(out[1]['rumor'], 1)
 
 
-FEED = {'wscn': WSCN, 'sina': SINA}
+FEED = {'wscn': WSCN, 'sina': SINA, 'verify': {'n': 1, 'c': 1, 'why': 'ok'}}
 
 
 def fake_transport(pushes, calls):
@@ -117,9 +117,13 @@ def fake_transport(pushes, calls):
         if 'deepseek' in url:
             calls.append(1)
             body = json.loads(request.content)
-            ids = [int(l.split()[0][1:]) for l in body['messages'][1]['content'].splitlines() if l.startswith('#')]
-            res = [{'i': i, 's': 5, 'q': 0, 't': 'NVDA', 'e': 'nvda-huang-returns-ceo', 'z': '黄仁勋回归英伟达'}
-                   for i in ids]
+            if body['messages'][0]['content'].startswith('你在推送前'):
+                return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(FEED['verify'])}}]})
+            lines = [l for l in body['messages'][1]['content'].splitlines() if l.startswith('#')]
+            res = [{'i': int(l.split()[0][1:]), 's': 5, 'q': 0, 't': 'NVDA',
+                    'e': 'cross-river-loan' if '跨河' in l else 'nvda-huang-returns-ceo',
+                    'z': '跨河银行贷款' if '跨河' in l else '黄仁勋回归英伟达'}
+                   for l in lines]
             return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps({'r': res})}}],
                                              'usage': {'prompt_tokens': 100, 'completion_tokens': 50}})
         if 'ntfy' in url or 'telegram' in url:
@@ -161,6 +165,9 @@ class EngineTests(unittest.TestCase):
                 await cycle()                      # 新消息：DeepSeek 打分，同一事件只推一次
                 FEED['wscn'] = wscn([(103, '黄仁勋重新担任英伟达首席执行官，股价飙升')])
                 await cycle()                      # 同一事件的后续报道：不再推送
+                FEED['verify'] = {'n': 0, 'c': 0, 'why': '旧闻'}
+                FEED['wscn'] = wscn([(104, '跨河银行推出比特币抵押贷款，规模扩大')])
+                await cycle()                      # 推送前检查判定为旧闻：不推
         asyncio.run(go())
         with store.opened() as db:
             rows = [dict(r) for r in db.execute('SELECT * FROM items ORDER BY id')]
@@ -169,10 +176,12 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(rows[0]['confirms'], 1)
         self.assertTrue(all(r['scored_by'] == 'rule' for r in rows if r['baseline'] and not r['dup_of']))
         new = [r for r in rows if not r['baseline']]
-        self.assertEqual(len(new), 3)
+        self.assertEqual(len(new), 4)
         self.assertEqual(sum(1 for r in new if r['pushed']), 1)
         self.assertEqual(len(pushes), 2)                 # ntfy + telegram 各一次
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 5)                  # 3 次打分 + 2 次推送前检查
+        old = next(r for r in new if '跨河' in r['title'])
+        self.assertEqual(old['reason'], '旧闻')
 
 
 if __name__ == '__main__':

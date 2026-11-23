@@ -167,8 +167,15 @@ class Engine:
                     events[r['event']] = max(events.get(r['event'], 0), r['score'] or 0)
             recent = [r['title'] for r in pushed] + [r['summary'] for r in pushed if r['summary']]
             last_hour = sum(1 for r in pushed if r['pushed'] > now - 3600)
+            symbols = {sym: w['name'] for w in store.watchlist(db) for sym in w['symbols']}
         for it in sorted(items, key=lambda x: -results[x['id']]['score']):
             it = dict(it, **results[it['id']])
+            # DeepSeek 认出的代码命中关注列表（标题里没写公司名时也算关注）
+            extra = [symbols[t] for t in (it.get('tickers') or '').split(',') if t in symbols]
+            if extra and not it.get('matched'):
+                it['matched'] = ','.join(dict.fromkeys(extra))
+                with store.opened() as db:
+                    db.execute('UPDATE items SET matched=? WHERE id=?', (it['matched'], it['id']))
             if not self.should_push(it, settings, recent, now, events):
                 if it.get('event') in events:
                     with store.opened() as db:   # 同一事件的后续报道算作“另有来源”
@@ -179,6 +186,8 @@ class Engine:
                 # 5 分不受上限限制；4 分超出上限的不推，但仍在网页信息流里
                 log.warning('push_skipped reason=hourly_cap item=%s', it['id'])
                 continue
+            if not await self.passes_check(it, now):
+                continue
             it['source_label'] = self.labels.get(it['source'], it['source'])
             await notify.push(self.client, self.env, it, list(settings['channels']))
             last_hour += 1
@@ -187,6 +196,46 @@ class Engine:
                 events[it['event']] = max(events.get(it['event'], 0), it['score'])
             with store.opened() as db:
                 db.execute('UPDATE items SET pushed=? WHERE id=?', (now, it['id']))
+
+    def related(self, it: dict, now: float) -> list:
+        """过去 24 小时里和候选消息相关的旧消息（包括启动时的积压），给推送前检查用。"""
+        terms = [t for t in (it.get('matched') or '').split(',') + (it.get('tickers') or '').split(',') if t]
+        with store.opened() as db:
+            rows = [dict(r) for r in db.execute(
+                'SELECT id, title, summary, tier, published, matched, tickers, event, dup_of FROM items '
+                'WHERE fetched > ? AND id != ? ORDER BY id DESC LIMIT 3000', (now - 86400, it['id']))]
+        out = []
+        for r in rows:
+            if r['dup_of'] == it['id']:
+                continue
+            hay = ','.join([r['matched'], r['tickers']])
+            if (it.get('event') and r['event'] == it['event']) or any(t in hay for t in terms) \
+                    or similar(r['title'], it['title'], 0.35):
+                out.append(r)
+        return sorted(out, key=lambda r: r['published'])[-30:]
+
+    async def passes_check(self, it: dict, now: float) -> bool:
+        """推送前用 DeepSeek 再查一次：旧闻翻炒不推；有可靠来源报道的取消传闻标记。出错时照推。"""
+        context = self.related(it, now)
+        if any(c['tier'] in ('A', 'B') and (c['dup_of'] == it['id'] or (it.get('event') and c['event'] == it['event']))
+               for c in context):
+            it['rumor'] = 0
+        if not scorer.has_key(self.env):
+            return True
+        try:
+            res, usage = await scorer.verify(self.client, self.env, it, context)
+        except Exception as e:
+            log.warning('verify_error item=%s error=%s', it['id'], scorer.describe_error(e))
+            return True
+        with store.opened() as db:
+            store.bump_usage(db, 'verify', usage['in'], usage['out'])
+            if res['confirmed']:
+                it['rumor'] = 0
+            db.execute('UPDATE items SET rumor=?, reason=? WHERE id=?', (it['rumor'], res['why'], it['id']))
+        if not res['new']:
+            log.info('push_skipped reason=old_news item=%s', it['id'])
+            return False
+        return True
 
     async def score_loop(self) -> None:
         while True:
