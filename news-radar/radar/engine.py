@@ -31,7 +31,7 @@ class Engine:
         self.wake = asyncio.Event()
 
     # ---------- 入库 ----------
-    def ingest(self, items: list) -> int:
+    def ingest(self, items: list, baseline: bool = False) -> int:
         now = time.time()
         new = 0
         with store.opened() as db:
@@ -45,7 +45,7 @@ class Engine:
                 dup = next((r['id'] for r in recent if r['fp'] == fp or similar(r['title'], it['title'])), None)
                 text = it['title'] + ' ' + it['body']
                 row = dict(it, fp=fp, fetched=now, matched=','.join(match_watch(text, watch)), dup_of=dup,
-                           published=min(it['published'], now))
+                           published=min(it['published'], now), baseline=1 if baseline else 0)
                 item_id = store.insert_item(db, row)
                 if item_id is None:
                     continue
@@ -71,7 +71,8 @@ class Engine:
             log.warning('source_error source=%s error=%s fails=%s', src.name, msg, src.fails)
             return
         src.ok()
-        new = self.ingest(items)
+        new = self.ingest(items, baseline=not src.seen)
+        src.seen = True
         with store.opened() as db:
             store.source_result(db, src.name, count=new)
         if new:
@@ -99,34 +100,48 @@ class Engine:
         if not items:
             return 0
         now = time.time()
-        old = [it for it in items if now - it['published'] > OLD_FOR_LLM]
-        fresh = [it for it in items if now - it['published'] <= OLD_FOR_LLM]
+        # 启动时的积压和发布超过 3 小时的旧消息：只用规则打分，不花钱也不推送
+        old = [it for it in items if it['baseline'] or now - it['published'] > OLD_FOR_LLM]
+        fresh = [it for it in items if not (it['baseline'] or now - it['published'] > OLD_FOR_LLM)]
         results = scorer.rule_results(old) if old else {}
         with store.opened() as db:
             settings = store.get_settings(db)
             used = store.usage_today(db).get('score', {}).get('n', 0)
             watch_names = [w['name'] for w in store.watchlist(db)]
-        for batch in scorer.batches(fresh):
-            got = {}
-            if scorer.has_key(self.env) and used < int(settings['llm_daily_batches']):
+            events = [(r['event'], r['summary']) for r in db.execute(
+                'SELECT event, summary, MAX(score) FROM items WHERE event != "" AND fetched > ? '
+                'GROUP BY event ORDER BY MAX(score) DESC, MAX(id) DESC LIMIT 30', (now - DUP_WINDOW,))]
+        limit = int(settings['llm_daily_batches'])
+        sem = asyncio.Semaphore(4)   # 最多 4 批同时打分
+
+        async def one(batch: list) -> dict:
+            nonlocal used
+            if not scorer.has_key(self.env) or used >= limit:
+                return scorer.finalize(batch, {})
+            used += 1
+            async with sem:
                 try:
-                    got, usage = await scorer.score_batch(self.client, self.env, batch, watch_names)
-                    used += 1
-                    with store.opened() as db:
-                        store.bump_usage(db, 'score', usage['in'], usage['out'])
+                    got, usage = await scorer.score_batch(self.client, self.env, batch, watch_names, events)
                 except Exception as e:
                     log.warning('score_error error=%s', scorer.describe_error(e))
-            results.update(scorer.finalize(batch, got))
+                    return scorer.finalize(batch, {})
+            with store.opened() as db:
+                store.bump_usage(db, 'score', usage['in'], usage['out'])
+            return scorer.finalize(batch, got)
+
+        for part in await asyncio.gather(*(one(b) for b in scorer.batches(fresh))):
+            results.update(part)
         with store.opened() as db:
             for item_id, r in results.items():
-                db.execute('UPDATE items SET score=?, rumor=?, tickers=?, summary=?, scored_by=? WHERE id=?',
-                           (r['score'], r['rumor'], r['tickers'], r['summary'], r['scored_by'], item_id))
+                db.execute('UPDATE items SET score=?, rumor=?, tickers=?, summary=?, event=?, scored_by=? WHERE id=?',
+                           (r['score'], r['rumor'], r['tickers'], r['summary'], r.get('event', ''), r['scored_by'],
+                            item_id))
         await self.maybe_push([it for it in items if it['id'] in results], results)
         return len(results)
 
     # ---------- 推送 ----------
-    def should_push(self, it: dict, settings: dict, recent_pushed: list, now: float) -> bool:
-        if it['score'] < int(settings['push_threshold']):
+    def should_push(self, it: dict, settings: dict, recent_pushed: list, now: float, events: set = frozenset()) -> bool:
+        if it.get('baseline') or it['score'] < int(settings['push_threshold']):
             return False
         if not it.get('matched') and it['score'] < int(settings['push_unwatched_min']):
             return False
@@ -134,18 +149,26 @@ class Engine:
             return False
         if now < float(settings.get('mute_until') or 0):
             return False
+        if it.get('event') and it['event'] in events:   # 同一件事只推一次
+            return False
         return not any(similar(p, it['title'], 0.5) or similar(p, it.get('summary') or '', 0.5) for p in recent_pushed)
 
     async def maybe_push(self, items: list, results: dict) -> None:
         now = time.time()
         with store.opened() as db:
             settings = store.get_settings(db)
-            pushed = db.execute('SELECT title, summary, pushed FROM items WHERE pushed > ?', (now - DUP_WINDOW,)).fetchall()
+            pushed = db.execute('SELECT title, summary, event, pushed FROM items WHERE pushed > ?',
+                                (now - DUP_WINDOW,)).fetchall()
+            events = {r['event'] for r in pushed if r['event']}
             recent = [r['title'] for r in pushed] + [r['summary'] for r in pushed if r['summary']]
             last_hour = sum(1 for r in pushed if r['pushed'] > now - 3600)
         for it in sorted(items, key=lambda x: -results[x['id']]['score']):
             it = dict(it, **results[it['id']])
-            if not self.should_push(it, settings, recent, now):
+            if not self.should_push(it, settings, recent, now, events):
+                if it.get('event') and it['event'] in events:
+                    with store.opened() as db:   # 同一事件的后续报道算作“另有来源”
+                        db.execute('UPDATE items SET confirms = confirms + 1 WHERE event=? AND pushed IS NOT NULL',
+                                   (it['event'],))
                 continue
             if last_hour >= int(settings['max_push_per_hour']):
                 log.warning('push_skipped reason=hourly_cap item=%s', it['id'])
@@ -154,6 +177,8 @@ class Engine:
             await notify.push(self.client, self.env, it, list(settings['channels']))
             last_hour += 1
             recent.append(it['title'])
+            if it.get('event'):
+                events.add(it['event'])
             with store.opened() as db:
                 db.execute('UPDATE items SET pushed=? WHERE id=?', (now, it['id']))
 

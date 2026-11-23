@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS items (
   pushed REAL,
   dup_of INTEGER,
   confirms INTEGER NOT NULL DEFAULT 0,
+  event TEXT NOT NULL DEFAULT '',
+  baseline INTEGER NOT NULL DEFAULT 0,
   UNIQUE(source, uid)
 );
 CREATE INDEX IF NOT EXISTS items_fetched ON items(fetched);
@@ -55,6 +57,12 @@ CREATE TABLE IF NOT EXISTS usage (day TEXT NOT NULL, kind TEXT NOT NULL, n INTEG
 CREATE TABLE IF NOT EXISTS source_state (name TEXT PRIMARY KEY, ok REAL, err TEXT NOT NULL DEFAULT '',
   fails INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0);
 '''
+
+MIGRATIONS = {
+    'confirms': 'confirms INTEGER NOT NULL DEFAULT 0',
+    'event': "event TEXT NOT NULL DEFAULT ''",
+    'baseline': 'baseline INTEGER NOT NULL DEFAULT 0',
+}
 
 DEFAULT_SETTINGS = {
     'push_threshold': 4,        # 达到几分推送（1~5）
@@ -97,6 +105,11 @@ def opened(path: Optional[Path] = None):
 def init(path: Optional[Path] = None) -> None:
     with opened(path) as db:
         db.executescript(SCHEMA)
+        cols = {r[1] for r in db.execute('PRAGMA table_info(items)')}
+        for col, ddl in MIGRATIONS.items():   # 旧数据库补新列
+            if col not in cols:
+                db.execute(f'ALTER TABLE items ADD COLUMN {ddl}')
+        db.execute('CREATE INDEX IF NOT EXISTS items_event ON items(event)')
         if not db.execute('SELECT 1 FROM settings WHERE k="initialized"').fetchone():
             now = time.time()
             for name, kind, symbols, keywords in DEFAULT_WATCH:
@@ -150,8 +163,8 @@ def remove_watch(db: sqlite3.Connection, name: str) -> bool:
 # ---------- 资讯 ----------
 def insert_item(db: sqlite3.Connection, item: dict) -> Optional[int]:
     cur = db.execute(
-        'INSERT OR IGNORE INTO items(source, uid, fp, title, body, url, market, tier, published, fetched, matched, dup_of) '
-        'VALUES(:source, :uid, :fp, :title, :body, :url, :market, :tier, :published, :fetched, :matched, :dup_of)', item)
+        'INSERT OR IGNORE INTO items(source, uid, fp, title, body, url, market, tier, published, fetched, matched, dup_of, baseline) '
+        'VALUES(:source, :uid, :fp, :title, :body, :url, :market, :tier, :published, :fetched, :matched, :dup_of, :baseline)', item)
     return cur.lastrowid if cur.rowcount else None
 
 

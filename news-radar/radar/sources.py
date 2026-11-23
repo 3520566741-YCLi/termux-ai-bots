@@ -37,6 +37,7 @@ class Source:
     enabled: bool = True
     next_run: float = 0.0
     fails: int = 0
+    seen: bool = False               # 本次启动后是否已经成功抓过（第一次抓到的是积压，不推送）
     meta: dict = field(default_factory=dict)
 
     def backoff(self) -> None:
@@ -85,34 +86,6 @@ def parse_sina(text: str, url: str) -> list:
             pass
         out.append(item('sina', it.get('id'), it.get('rich_text') or '', '',
                         safe_url(it.get('docurl') or ''), ts))
-    return out
-
-
-def parse_cls(text: str, url: str) -> list:
-    data = json.loads(text)
-    rows = (data.get('data') or {}).get('roll_data') or data.get('data', {}).get('list') or []
-    out = []
-    for it in rows:
-        body = it.get('content') or it.get('brief') or ''
-        out.append(item('cls', it.get('id'), it.get('title') or body, body,
-                        safe_url(it.get('shareurl') or ''), float(it.get('ctime') or time.time())))
-    return out
-
-
-def parse_jin10(text: str, url: str) -> list:
-    data = json.loads(text)
-    out = []
-    for it in data.get('data') or []:
-        d = it.get('data') or {}
-        body = d.get('content') or d.get('title') or ''
-        if not body:
-            continue
-        ts = time.time()
-        try:
-            ts = datetime.strptime(it.get('time', ''), '%Y-%m-%d %H:%M:%S').timestamp()
-        except ValueError:
-            pass
-        out.append(item('jin10', it.get('id'), body, '', '', ts))
     return out
 
 
@@ -205,8 +178,6 @@ def gnews_urls(lang: str) -> Callable:
 
 def yahoo_urls(watch: list) -> list:
     syms = [s for w in watch if w['kind'] == 'stock' for s in w['symbols'] if re.fullmatch(r'[A-Z0-9.\-]{1,10}', s)]
-    syms += [f'{s}-USD' for w in watch if w['kind'] == 'crypto' for s in w['symbols'][:1]
-             if re.fullmatch(r'[A-Z0-9]{2,10}', s)]
     return [(f'https://feeds.finance.yahoo.com/rss/2.0/headline?s={",".join(syms[i:i + 10])}&region=US&lang=en-US', {})
             for i in range(0, len(syms), 10)]
 
@@ -226,16 +197,9 @@ def build_sources(env: dict) -> list:
                parse_wallstcn),
         Source('sina', '新浪财经 7x24', 30, 'B', 'mixed',
                fixed('https://zhibo.sina.com.cn/api/zhibo/feed?zhibo_id=152&page=1&page_size=30'), parse_sina),
-        Source('cls', '财联社电报', 30, 'B', 'mixed',
-               fixed('https://www.cls.cn/nodeapi/telegraphList?rn=30', {'Referer': 'https://www.cls.cn/telegraph'}),
-               parse_cls),
-        Source('jin10', '金十数据', 30, 'B', 'mixed',
-               fixed('https://flash-api.jin10.com/get_flash_list?channel=-8200&vip=1',
-                     {'x-app-id': 'bVBF4FyRTn5NJF5n', 'x-version': '1.0.0', 'Referer': 'https://www.jin10.com/'}),
-               parse_jin10),
         Source('gnews_en', 'Google 新闻（英文）', 180, 'B', 'mixed', gnews_urls('en'), parse_feed('gnews_en')),
         Source('gnews_zh', 'Google 新闻（中文）', 300, 'B', 'mixed', gnews_urls('zh'), parse_feed('gnews_zh')),
-        Source('yahoo', '雅虎财经个股新闻', 180, 'B', 'stock', yahoo_urls, parse_feed('yahoo')),
+        Source('yahoo', '雅虎财经个股新闻', 600, 'B', 'stock', yahoo_urls, parse_feed('yahoo')),
         Source('nvidia', '英伟达官方新闻稿', 300, 'A', 'stock',
                fixed('https://nvidianews.nvidia.com/releases.xml'), parse_feed('nvidia')),
         Source('cointelegraph', 'Cointelegraph', 120, 'B', 'crypto',

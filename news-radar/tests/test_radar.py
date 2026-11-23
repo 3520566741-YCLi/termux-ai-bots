@@ -104,17 +104,22 @@ class ScorerTests(unittest.TestCase):
         self.assertEqual(out[1]['rumor'], 1)
 
 
-def fake_transport(pushes):
+FEED = {'wscn': WSCN, 'sina': SINA}
+
+
+def fake_transport(pushes, calls):
     def handler(request: httpx.Request):
         url = str(request.url)
         if 'wscn' in url:
-            return httpx.Response(200, text=WSCN)
+            return httpx.Response(200, text=FEED['wscn'])
         if 'sina' in url:
-            return httpx.Response(200, text=SINA)
+            return httpx.Response(200, text=FEED['sina'])
         if 'deepseek' in url:
+            calls.append(1)
             body = json.loads(request.content)
             ids = [int(l.split()[0][1:]) for l in body['messages'][1]['content'].splitlines() if l.startswith('#')]
-            res = [{'i': i, 's': 5 if n == 0 else 2, 'q': 0, 't': 'NVDA', 'z': '黄仁勋回归英伟达'} for n, i in enumerate(ids)]
+            res = [{'i': i, 's': 5, 'q': 0, 't': 'NVDA', 'e': 'nvda-huang-returns-ceo', 'z': '黄仁勋回归英伟达'}
+                   for i in ids]
             return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps({'r': res})}}],
                                              'usage': {'prompt_tokens': 100, 'completion_tokens': 50}})
         if 'ntfy' in url or 'telegram' in url:
@@ -124,40 +129,50 @@ def fake_transport(pushes):
     return httpx.MockTransport(handler)
 
 
+def wscn(items):
+    return json.dumps({'data': {'items': [{'id': i, 'content_text': t, 'display_time': int(time.time()) - 10}
+                                          for i, t in items]}})
+
+
 class EngineTests(unittest.TestCase):
     def test_pipeline(self):
-        pushes = []
+        pushes, calls = [], []
         env = {'DEEPSEEK_API_KEY': 'k', 'DEEPSEEK_BASE_URL': 'https://api.deepseek.com', 'DEEPSEEK_MODEL': 'deepseek-chat',
                'TELEGRAM_BOT_TOKEN': 't', 'TELEGRAM_CHAT_IDS': '-1', 'RADAR_NTFY_TOPIC': 'radar-test'}
         store.init()
         srcs = [s for s in sources.build_sources({}) if s.name in ('wallstcn', 'sina')]
 
         async def go():
-            async with httpx.AsyncClient(transport=fake_transport(pushes)) as client:
+            async with httpx.AsyncClient(transport=fake_transport(pushes, calls)) as client:
                 eng = engine.Engine(env, client, srcs)
                 with store.opened() as db:
                     store.set_setting(db, 'channels', ['ntfy', 'telegram'])
-                for s in srcs:
-                    await eng.fetch_once(s)
-                await eng.score_pending()
-                # 再来一次：不应重复推送
-                for s in srcs:
-                    s.next_run = 0
-                    await eng.fetch_once(s)
-                await eng.score_pending()
+
+                async def cycle():
+                    for s in srcs:
+                        s.next_run = 0
+                        await eng.fetch_once(s)
+                    await eng.score_pending()
+                await cycle()                      # 第一次：积压，只用规则打分，不推送
+                self.assertEqual(pushes, [])
+                self.assertEqual(calls, [])
+                FEED['wscn'] = wscn([(101, '英伟达股价盘后大涨8%，市场关注黄仁勋复出'),
+                                     (102, 'Nvidia confirms Jensen Huang back as chief executive')])
+                await cycle()                      # 新消息：DeepSeek 打分，同一事件只推一次
+                FEED['wscn'] = wscn([(103, '黄仁勋重新担任英伟达首席执行官，股价飙升')])
+                await cycle()                      # 同一事件的后续报道：不再推送
         asyncio.run(go())
         with store.opened() as db:
             rows = [dict(r) for r in db.execute('SELECT * FROM items ORDER BY id')]
-            usage = store.usage_today(db)
-        self.assertEqual(len(rows), 3)
         sina = next(r for r in rows if r['source'] == 'sina')
         self.assertIsNotNone(sina['dup_of'])            # 跨源重复
-        first = rows[0]
-        self.assertEqual(first['confirms'], 1)
-        self.assertEqual(first['score'], 5)
-        self.assertIsNotNone(first['pushed'])
+        self.assertEqual(rows[0]['confirms'], 1)
+        self.assertTrue(all(r['scored_by'] == 'rule' for r in rows if r['baseline'] and not r['dup_of']))
+        new = [r for r in rows if not r['baseline']]
+        self.assertEqual(len(new), 3)
+        self.assertEqual(sum(1 for r in new if r['pushed']), 1)
         self.assertEqual(len(pushes), 2)                 # ntfy + telegram 各一次
-        self.assertEqual(usage['score']['n'], 1)
+        self.assertEqual(len(calls), 2)
 
 
 if __name__ == '__main__':
