@@ -1,0 +1,201 @@
+"""SQLite 存储：资讯、关注列表、设置、网页推送订阅、聊天记录、用量。
+
+每次操作单独开连接（WAL 模式），抓取协程和网页线程可以同时读写。
+"""
+import json
+import sqlite3
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterable, Optional
+
+from . import config
+
+SCHEMA = '''
+CREATE TABLE IF NOT EXISTS items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  fp TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '',
+  market TEXT NOT NULL DEFAULT '',
+  tier TEXT NOT NULL DEFAULT 'B',
+  published REAL NOT NULL,
+  fetched REAL NOT NULL,
+  matched TEXT NOT NULL DEFAULT '',
+  score INTEGER,
+  rumor INTEGER NOT NULL DEFAULT 0,
+  tickers TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  scored_by TEXT NOT NULL DEFAULT '',
+  pushed REAL,
+  dup_of INTEGER,
+  confirms INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(source, uid)
+);
+CREATE INDEX IF NOT EXISTS items_fetched ON items(fetched);
+CREATE INDEX IF NOT EXISTS items_fp ON items(fp);
+CREATE INDEX IF NOT EXISTS items_unscored ON items(score) WHERE score IS NULL;
+CREATE TABLE IF NOT EXISTS watch (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL DEFAULT 'stock',
+  symbols TEXT NOT NULL DEFAULT '[]',
+  keywords TEXT NOT NULL DEFAULT '[]',
+  created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, data TEXT NOT NULL, created REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, text TEXT NOT NULL, ts REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS usage (day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0,
+  tin INTEGER NOT NULL DEFAULT 0, tout INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, kind));
+CREATE TABLE IF NOT EXISTS source_state (name TEXT PRIMARY KEY, ok REAL, err TEXT NOT NULL DEFAULT '',
+  fails INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0);
+'''
+
+DEFAULT_SETTINGS = {
+    'push_threshold': 4,        # 达到几分推送（1~5）
+    'push_unwatched_min': 5,    # 不在关注列表里的消息，至少几分才推
+    'max_push_per_hour': 12,
+    'mute_until': 0,
+    'llm_daily_batches': 400,   # 每天最多调用 DeepSeek 打分多少批（每批最多 20 条），超出后只用关键词规则
+    'channels': ['ntfy', 'telegram', 'webpush'],
+}
+
+# 第一次启动时的默认关注（可在网页里聊天修改）
+DEFAULT_WATCH = [
+    ('英伟达', 'stock', ['NVDA'], ['英伟达', 'NVIDIA', 'Nvidia', '黄仁勋', 'Jensen Huang']),
+    ('特斯拉', 'stock', ['TSLA'], ['特斯拉', 'Tesla', '马斯克', 'Musk']),
+    ('比特币', 'crypto', ['BTC'], ['比特币', 'Bitcoin', 'BTC']),
+    ('以太坊', 'crypto', ['ETH'], ['以太坊', 'Ethereum', 'ETH']),
+]
+
+
+def connect(path: Optional[Path] = None) -> sqlite3.Connection:
+    path = path or config.DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(str(path), timeout=15)
+    db.row_factory = sqlite3.Row
+    db.execute('PRAGMA journal_mode=WAL')
+    db.execute('PRAGMA busy_timeout=15000')
+    return db
+
+
+@contextmanager
+def opened(path: Optional[Path] = None):
+    db = connect(path)
+    try:
+        with db:
+            yield db
+    finally:
+        db.close()
+
+
+def init(path: Optional[Path] = None) -> None:
+    with opened(path) as db:
+        db.executescript(SCHEMA)
+        if not db.execute('SELECT 1 FROM settings WHERE k="initialized"').fetchone():
+            now = time.time()
+            for name, kind, symbols, keywords in DEFAULT_WATCH:
+                db.execute('INSERT OR IGNORE INTO watch(name, kind, symbols, keywords, created) VALUES(?,?,?,?,?)',
+                           (name, kind, json.dumps(symbols), json.dumps(keywords, ensure_ascii=False), now))
+            db.execute('INSERT INTO settings VALUES("initialized", "1")')
+
+
+# ---------- 设置 ----------
+def get_settings(db: sqlite3.Connection) -> dict:
+    out = dict(DEFAULT_SETTINGS)
+    for row in db.execute('SELECT k, v FROM settings'):
+        if row['k'] in out:
+            try:
+                out[row['k']] = json.loads(row['v'])
+            except ValueError:
+                pass
+    return out
+
+
+def set_setting(db: sqlite3.Connection, key: str, value) -> None:
+    if key not in DEFAULT_SETTINGS:
+        raise KeyError(key)
+    db.execute('INSERT OR REPLACE INTO settings VALUES(?, ?)', (key, json.dumps(value, ensure_ascii=False)))
+
+
+# ---------- 关注列表 ----------
+def watchlist(db: sqlite3.Connection) -> list:
+    return [{'id': r['id'], 'name': r['name'], 'kind': r['kind'], 'symbols': json.loads(r['symbols']),
+             'keywords': json.loads(r['keywords'])} for r in db.execute('SELECT * FROM watch ORDER BY id')]
+
+
+def add_watch(db: sqlite3.Connection, name: str, kind: str, symbols: Iterable[str], keywords: Iterable[str]) -> None:
+    symbols = sorted({s.strip().upper() for s in symbols if s and s.strip()})[:10]
+    keywords = list(dict.fromkeys(k.strip() for k in [name, *keywords] if k and k.strip()))[:20]
+    row = db.execute('SELECT symbols, keywords FROM watch WHERE name=?', (name,)).fetchone()
+    if row:   # 已存在就合并
+        symbols = sorted(set(json.loads(row['symbols'])) | set(symbols))
+        keywords = list(dict.fromkeys(json.loads(row['keywords']) + keywords))
+        db.execute('UPDATE watch SET kind=?, symbols=?, keywords=? WHERE name=?',
+                   (kind, json.dumps(symbols), json.dumps(keywords, ensure_ascii=False), name))
+    else:
+        db.execute('INSERT INTO watch(name, kind, symbols, keywords, created) VALUES(?,?,?,?,?)',
+                   (name, kind, json.dumps(symbols), json.dumps(keywords, ensure_ascii=False), time.time()))
+
+
+def remove_watch(db: sqlite3.Connection, name: str) -> bool:
+    return db.execute('DELETE FROM watch WHERE name=?', (name,)).rowcount > 0
+
+
+# ---------- 资讯 ----------
+def insert_item(db: sqlite3.Connection, item: dict) -> Optional[int]:
+    cur = db.execute(
+        'INSERT OR IGNORE INTO items(source, uid, fp, title, body, url, market, tier, published, fetched, matched, dup_of) '
+        'VALUES(:source, :uid, :fp, :title, :body, :url, :market, :tier, :published, :fetched, :matched, :dup_of)', item)
+    return cur.lastrowid if cur.rowcount else None
+
+
+def recent_items(db: sqlite3.Connection, limit: int = 80, min_score: int = 0, before: Optional[int] = None,
+                 market: str = '', query: str = '') -> list:
+    sql = 'SELECT * FROM items WHERE dup_of IS NULL AND COALESCE(score, 0) >= ?'
+    args: list = [min_score]
+    if before:
+        sql += ' AND id < ?'
+        args.append(before)
+    if market:
+        sql += ' AND market = ?'
+        args.append(market)
+    if query:
+        sql += ' AND (title LIKE ? OR body LIKE ? OR matched LIKE ? OR tickers LIKE ?)'
+        args += [f'%{query}%'] * 4
+    sql += ' ORDER BY id DESC LIMIT ?'
+    args.append(limit)
+    return [dict(r) for r in db.execute(sql, args)]
+
+
+def bump_usage(db: sqlite3.Connection, kind: str, tin: int = 0, tout: int = 0) -> None:
+    day = time.strftime('%Y-%m-%d')
+    db.execute('INSERT INTO usage(day, kind, n, tin, tout) VALUES(?,?,1,?,?) '
+               'ON CONFLICT(day, kind) DO UPDATE SET n=n+1, tin=tin+excluded.tin, tout=tout+excluded.tout',
+               (day, kind, tin, tout))
+
+
+def usage_today(db: sqlite3.Connection) -> dict:
+    day = time.strftime('%Y-%m-%d')
+    return {r['kind']: {'n': r['n'], 'in': r['tin'], 'out': r['tout']}
+            for r in db.execute('SELECT * FROM usage WHERE day=?', (day,))}
+
+
+def source_result(db: sqlite3.Connection, name: str, error: str = '', count: int = 0) -> None:
+    if error:
+        db.execute('INSERT INTO source_state(name, err, fails) VALUES(?,?,1) '
+                   'ON CONFLICT(name) DO UPDATE SET err=excluded.err, fails=fails+1', (name, error[:200]))
+    else:
+        db.execute('INSERT INTO source_state(name, ok, count) VALUES(?,?,?) '
+                   'ON CONFLICT(name) DO UPDATE SET ok=excluded.ok, err="", fails=0, count=count+excluded.count',
+                   (name, time.time(), count))
+
+
+def prune(db: sqlite3.Connection, days: int = 30) -> None:
+    db.execute('DELETE FROM items WHERE fetched < ?', (time.time() - days * 86400,))
+    db.execute('DELETE FROM chat WHERE id NOT IN (SELECT id FROM chat ORDER BY id DESC LIMIT 200)')

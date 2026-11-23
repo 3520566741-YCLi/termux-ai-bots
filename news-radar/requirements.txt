@@ -1,0 +1,3 @@
+# 资讯雷达只需要 httpx（AI Council 已安装）。网页推送是可选的：
+#   .venv/bin/pip install -r news-radar/requirements-webpush.txt
+httpx==0.28.1

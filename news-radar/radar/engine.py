@@ -1,0 +1,185 @@
+"""抓取 → 去重 → 打分 → 推送 的主循环。
+
+- 每个源按自己的间隔抓（快讯 20~30 秒，RSS 2~5 分钟），失败自动退避；
+- 新消息先按指纹和标题相似度跨源去重：重复的只给原消息加“另有 N 个来源报道”，不再打分，省钱；
+- 打分：发布超过 3 小时的旧消息只用规则打分；其余交给 DeepSeek（每批 20 条，每天有批次上限）；
+- 推送条件：分数 ≥ 阈值，且（命中关注列表 或 分数 ≥ 非关注推送线），发布 45 分钟内，
+  6 小时内没推过相似消息，没静音，每小时不超过上限。
+"""
+import asyncio
+import logging
+import time
+
+import httpx
+
+from . import config, notify, scorer, store
+from .sources import Source, build_sources, run_source
+from .text import fingerprint, match_watch, similar
+
+log = logging.getLogger('radar')
+OLD_FOR_LLM = 3 * 3600
+FRESH_FOR_PUSH = 45 * 60
+DUP_WINDOW = 6 * 3600
+
+
+class Engine:
+    def __init__(self, env: dict, client: httpx.AsyncClient, sources: list = None):
+        self.env = env
+        self.client = client
+        self.sources: list = sources if sources is not None else build_sources(env)
+        self.labels = {s.name: s.label for s in self.sources}
+        self.wake = asyncio.Event()
+
+    # ---------- 入库 ----------
+    def ingest(self, items: list) -> int:
+        now = time.time()
+        new = 0
+        with store.opened() as db:
+            watch = store.watchlist(db)
+            recent = db.execute('SELECT id, title, fp FROM items WHERE dup_of IS NULL AND fetched > ? '
+                                'ORDER BY id DESC LIMIT 600', (now - DUP_WINDOW,)).fetchall()
+            for it in items:
+                if db.execute('SELECT 1 FROM items WHERE source=? AND uid=?', (it['source'], it['uid'])).fetchone():
+                    continue
+                fp = fingerprint(it['title'], it['body'])
+                dup = next((r['id'] for r in recent if r['fp'] == fp or similar(r['title'], it['title'])), None)
+                text = it['title'] + ' ' + it['body']
+                row = dict(it, fp=fp, fetched=now, matched=','.join(match_watch(text, watch)), dup_of=dup,
+                           published=min(it['published'], now))
+                item_id = store.insert_item(db, row)
+                if item_id is None:
+                    continue
+                new += 1
+                if dup:
+                    db.execute('UPDATE items SET confirms = confirms + 1 WHERE id=?', (dup,))
+                else:
+                    recent.insert(0, {'id': item_id, 'title': it['title'], 'fp': fp})
+        if new:
+            self.wake.set()
+        return new
+
+    async def fetch_once(self, src: Source) -> None:
+        with store.opened() as db:
+            watch = store.watchlist(db)
+        try:
+            items = await run_source(self.client, src, watch)
+        except Exception as e:   # 任何源出错都不影响别的源
+            src.backoff()
+            msg = scorer.describe_error(e)
+            with store.opened() as db:
+                store.source_result(db, src.name, error=msg)
+            log.warning('source_error source=%s error=%s fails=%s', src.name, msg, src.fails)
+            return
+        src.ok()
+        new = self.ingest(items)
+        with store.opened() as db:
+            store.source_result(db, src.name, count=new)
+        if new:
+            log.info('source_ok source=%s new=%s', src.name, new)
+
+    async def fetch_loop(self) -> None:
+        while True:
+            now = time.time()
+            due = [s for s in self.sources if s.enabled and s.next_run <= now]
+            for s in due:
+                s.next_run = now + s.interval   # 防止上一轮没结束又被调度
+            if due:
+                await asyncio.gather(*(self.fetch_once(s) for s in due))
+            await asyncio.sleep(2)
+
+    # ---------- 打分 ----------
+    def _pending(self, limit: int = 200) -> list:
+        with store.opened() as db:
+            rows = db.execute('SELECT * FROM items WHERE score IS NULL AND dup_of IS NULL ORDER BY id LIMIT ?',
+                              (limit,)).fetchall()
+            return [dict(r) for r in rows]
+
+    async def score_pending(self) -> int:
+        items = self._pending()
+        if not items:
+            return 0
+        now = time.time()
+        old = [it for it in items if now - it['published'] > OLD_FOR_LLM]
+        fresh = [it for it in items if now - it['published'] <= OLD_FOR_LLM]
+        results = scorer.rule_results(old) if old else {}
+        with store.opened() as db:
+            settings = store.get_settings(db)
+            used = store.usage_today(db).get('score', {}).get('n', 0)
+            watch_names = [w['name'] for w in store.watchlist(db)]
+        for batch in scorer.batches(fresh):
+            got = {}
+            if scorer.has_key(self.env) and used < int(settings['llm_daily_batches']):
+                try:
+                    got, usage = await scorer.score_batch(self.client, self.env, batch, watch_names)
+                    used += 1
+                    with store.opened() as db:
+                        store.bump_usage(db, 'score', usage['in'], usage['out'])
+                except Exception as e:
+                    log.warning('score_error error=%s', scorer.describe_error(e))
+            results.update(scorer.finalize(batch, got))
+        with store.opened() as db:
+            for item_id, r in results.items():
+                db.execute('UPDATE items SET score=?, rumor=?, tickers=?, summary=?, scored_by=? WHERE id=?',
+                           (r['score'], r['rumor'], r['tickers'], r['summary'], r['scored_by'], item_id))
+        await self.maybe_push([it for it in items if it['id'] in results], results)
+        return len(results)
+
+    # ---------- 推送 ----------
+    def should_push(self, it: dict, settings: dict, recent_pushed: list, now: float) -> bool:
+        if it['score'] < int(settings['push_threshold']):
+            return False
+        if not it.get('matched') and it['score'] < int(settings['push_unwatched_min']):
+            return False
+        if now - it['published'] > FRESH_FOR_PUSH:
+            return False
+        if now < float(settings.get('mute_until') or 0):
+            return False
+        return not any(similar(p, it['title'], 0.5) or similar(p, it.get('summary') or '', 0.5) for p in recent_pushed)
+
+    async def maybe_push(self, items: list, results: dict) -> None:
+        now = time.time()
+        with store.opened() as db:
+            settings = store.get_settings(db)
+            pushed = db.execute('SELECT title, summary, pushed FROM items WHERE pushed > ?', (now - DUP_WINDOW,)).fetchall()
+            recent = [r['title'] for r in pushed] + [r['summary'] for r in pushed if r['summary']]
+            last_hour = sum(1 for r in pushed if r['pushed'] > now - 3600)
+        for it in sorted(items, key=lambda x: -results[x['id']]['score']):
+            it = dict(it, **results[it['id']])
+            if not self.should_push(it, settings, recent, now):
+                continue
+            if last_hour >= int(settings['max_push_per_hour']):
+                log.warning('push_skipped reason=hourly_cap item=%s', it['id'])
+                break
+            it['source_label'] = self.labels.get(it['source'], it['source'])
+            await notify.push(self.client, self.env, it, list(settings['channels']))
+            last_hour += 1
+            recent.append(it['title'])
+            with store.opened() as db:
+                db.execute('UPDATE items SET pushed=? WHERE id=?', (now, it['id']))
+
+    async def score_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.wait_for(self.wake.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                pass
+            self.wake.clear()
+            await asyncio.sleep(2)   # 攒一下同一时间进来的消息，凑成一批
+            try:
+                while await self.score_pending():
+                    pass
+            except Exception:
+                log.exception('score_loop_error')
+
+    async def housekeeping(self) -> None:
+        while True:
+            try:
+                with store.opened() as db:
+                    store.prune(db)
+                (config.DATA / 'heartbeat').write_text(str(int(time.time())))
+            except Exception:
+                log.exception('housekeeping_error')
+            await asyncio.sleep(60)
+
+    async def run(self) -> None:
+        await asyncio.gather(self.fetch_loop(), self.score_loop(), self.housekeeping())
