@@ -146,8 +146,8 @@ class Engine:
             return False
         if not it.get('matched') and it['score'] < int(settings['push_unwatched_min']):
             return False
-        if now - it['published'] > FRESH_FOR_PUSH:
-            return False
+        if now - it['published'] > OLD_FOR_LLM:
+            return False   # 45 分钟 ~ 3 小时的迟到消息交给推送前检查决定
         if now < float(settings.get('mute_until') or 0):
             return False
         if it.get('event') in events:
@@ -233,24 +233,31 @@ class Engine:
     async def passes_check(self, it: dict, now: float) -> bool:
         """推送前用 DeepSeek 再查一次：旧闻翻炒不推；有可靠来源报道的取消传闻标记。出错时照推。"""
         context = self.related(it, now)
-        with store.opened() as db:   # 同一消息被 A/B 级来源重复报道过（去重时并进来的）
-            reliable_dup = db.execute('SELECT 1 FROM items WHERE dup_of=? AND tier IN ("A","B") LIMIT 1',
-                                      (it['id'],)).fetchone()
+        late = now - it['published'] > FRESH_FOR_PUSH
+        if late:
+            it['late_minutes'] = int((now - it['published']) / 60)
+        with store.opened() as db:   # 同一消息的其他报道（去重时并进来的）
+            dups = [dict(r) for r in db.execute('SELECT title, tier FROM items WHERE dup_of=? ORDER BY id LIMIT 8',
+                                                (it['id'],))]
+        reliable_dup = any(d['tier'] in ('A', 'B') for d in dups)
         if reliable_dup or any(c['tier'] in ('A', 'B') and it.get('event') and c['event'] == it['event']
                                for c in context):
             it['rumor'] = 0
         if not scorer.has_key(self.env):
-            return True
+            return not late
         try:
-            res, usage = await scorer.verify(self.client, self.env, it, context)
+            res, usage = await scorer.verify(self.client, self.env, it, context, [d['title'] for d in dups])
         except Exception as e:
             log.warning('verify_error item=%s error=%s', it['id'], scorer.describe_error(e))
-            return True
+            return not late   # 检查失败：新鲜的照推（宁可多推），迟到的不推
+        if res.get('summary'):
+            it['summary'] = res['summary']
         with store.opened() as db:
             store.bump_usage(db, 'verify', usage['in'], usage['out'])
             if res['confirmed']:
                 it['rumor'] = 0
-            db.execute('UPDATE items SET rumor=?, reason=? WHERE id=?', (it['rumor'], res['why'], it['id']))
+            db.execute('UPDATE items SET rumor=?, reason=?, summary=? WHERE id=?',
+                       (it['rumor'], res['why'], it.get('summary') or '', it['id']))
         if not res['new']:
             log.info('push_skipped reason=old_news item=%s', it['id'])
             return False

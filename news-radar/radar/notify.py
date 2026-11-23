@@ -56,6 +56,8 @@ def format_alert(it: dict) -> tuple:
     if it.get('summary') and it['title'] not in it['summary']:
         lines.append('原文：' + it['title'][:200])
     lines.append(f'来源：{it.get("source_label") or it["source"]}（可信度 {it.get("tier", "B")}）')
+    if it.get('late_minutes'):
+        lines.append(f'⏱ 这条消息发布于 {it["late_minutes"]} 分钟前，来源晚到')
     if it.get('confirms'):
         lines.append(f'另有 {it["confirms"]} 个来源报道')
     elif it.get('tier') != 'A' and not it.get('rumor'):
