@@ -96,9 +96,11 @@
     pills.push(el('button.cw-pill.cw-add.press', { type: 'button', 'aria-label': '添加关注', onclick: openAdd },
       R.icon('plus', 'xs'), el('span', list && !list.length ? '添加关注' : '添加')));
     const count = list ? el('span.cw-count', String(list.length)) : null;
-    R.clear(watchEl,
-      el('div.cw-h', el('span', '正在关注'), count),
-      el('div.cw-scroll', { role: 'list' }, pills));
+    const sc = el('div.cw-scroll', { role: 'list' }, pills);
+    const edge = () => sc.classList.toggle('at-end', sc.scrollLeft + sc.clientWidth >= sc.scrollWidth - 4);
+    sc.addEventListener('scroll', edge, { passive: true });
+    R.clear(watchEl, el('div.cw-h', el('span', '正在关注'), count), sc);
+    requestAnimationFrame(edge);
   }
 
   function applyWatch(watch) {

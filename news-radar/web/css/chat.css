@@ -131,3 +131,6 @@
 #tabbar.chat-kb-hide { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(16px); }
 #chat-composer .cc-input.scroll { -webkit-mask-image: linear-gradient(transparent 0, #000 9px, #000 calc(100% - 6px), transparent 100%); mask-image: linear-gradient(transparent 0, #000 9px, #000 calc(100% - 6px), transparent 100%); }
 #page-chat .cb-changes .chip { border-radius: 12px; }
+/* 右侧渐隐，提示关注胶囊可以横滑；滑到底时去掉 */
+#page-chat .cw-scroll { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent); }
+#page-chat .cw-scroll.at-end { -webkit-mask-image: none; mask-image: none; }
