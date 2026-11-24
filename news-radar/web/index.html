@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>资讯雷达</title>
+<meta name="description" content="24 小时私人股票和加密货币资讯雷达">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="资讯雷达">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/feed.css">
+<link rel="stylesheet" href="css/digest.css">
+<link rel="stylesheet" href="css/chat.css">
+<link rel="stylesheet" href="css/settings.css">
+<link rel="stylesheet" href="css/compose.css">
+<script defer src="js/ui.js"></script>
+<script defer src="js/api.js"></script>
+<script defer src="js/mock.js"></script>
+<script defer src="js/compose.js"></script>
+<script defer src="js/feed.js"></script>
+<script defer src="js/digest.js"></script>
+<script defer src="js/chat.js"></script>
+<script defer src="js/settings.js"></script>
+<script defer src="js/app.js"></script>
+</head>
+<body>
+<div id="app">
+  <div class="topbar glass strong" id="topbar" aria-hidden="true"><div class="t" id="topbar-title"></div></div>
+
+  <main>
+    <section class="page" id="page-feed" data-page="feed" aria-label="快讯"></section>
+    <section class="page" id="page-digest" data-page="digest" aria-label="日报"></section>
+    <section class="page" id="page-chat" data-page="chat" aria-label="助手"></section>
+    <section class="page" id="page-settings" data-page="settings" aria-label="设置"></section>
+  </main>
+
+  <nav class="tabbar glass" id="tabbar" aria-label="主导航">
+    <span class="tab-indicator" id="tab-indicator" aria-hidden="true"></span>
+    <button class="tab press" data-tab="feed" aria-label="快讯"><span data-icon="news"></span><span>快讯</span></button>
+    <button class="tab press" data-tab="digest" aria-label="日报"><span data-icon="digest"></span><span>日报</span></button>
+    <button class="tab press" data-tab="chat" aria-label="助手"><span data-icon="chat"></span><span>助手</span></button>
+    <button class="tab press" data-tab="settings" aria-label="设置"><span data-icon="gear"></span><span>设置</span></button>
+  </nav>
+</div>
+
+<div class="toast-wrap" id="toast" aria-live="polite"></div>
+
+<div class="login" id="login" hidden>
+  <img class="logo" src="icons/icon-192.png" alt="">
+  <h1>资讯雷达</h1>
+  <p>请用 Mini PC 上给出的口令链接打开，或在下面输入口令。</p>
+  <form id="login-form" autocomplete="off">
+    <input class="field" id="login-token" type="password" inputmode="text" placeholder="口令" aria-label="口令" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="err" id="login-err" role="alert"></div>
+    <button class="btn primary block press" type="submit" id="login-btn">进入</button>
+  </form>
+</div>
+
+<noscript><p style="padding:40px;text-align:center">需要开启 JavaScript 才能使用资讯雷达。</p></noscript>
+</body>
+</html>

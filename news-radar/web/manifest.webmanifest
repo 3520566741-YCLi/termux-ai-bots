@@ -1,0 +1,17 @@
+{
+  "name": "资讯雷达",
+  "short_name": "资讯雷达",
+  "description": "24 小时私人股票和加密货币资讯雷达",
+  "lang": "zh-CN",
+  "start_url": "/#feed",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F2F2F7",
+  "theme_color": "#F2F2F7",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
