@@ -166,3 +166,6 @@ svg.i.vt-chev { color: var(--ink-3); stroke-width: 2.4; }
 }
 #page-vault .vt-slim-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #page-vault .vt-slim svg.i { flex: none; }
+/* 吸顶筛选条背后的渐隐底（与快讯一致），滚过的内容不会在顶栏和胶囊之间露出半截 */
+#page-vault .vt-filter::before { content: ""; position: absolute; z-index: -1; left: calc(-1 * var(--gutter)); right: calc(-1 * var(--gutter)); top: 0; bottom: -12px;
+  background: linear-gradient(to bottom, var(--bg) 0%, var(--bg) 50%, color-mix(in srgb, var(--bg) 70%, transparent) 78%, transparent 100%); pointer-events: none; }

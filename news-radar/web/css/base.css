@@ -159,7 +159,7 @@ svg.i.xs { width: 13px; height: 13px; stroke-width: 2.2; }
 .tabbar.hidden-by-sheet { opacity: 0; pointer-events: none; }
 .tab { position: relative; z-index: 1; border: 0; background: none; border-radius: 999px; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 2px; font-size: 10px; font-weight: 600; color: var(--ink); letter-spacing: 0; }
-.tab svg.i { width: 24px; height: 24px; }
+.tab svg.i { width: 25px; height: 25px; stroke-width: 1.75; }
 .tab.is-active { color: var(--tint); }
 .tab .badge { position: absolute; top: 5px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px;
   background: var(--red); color: #fff; font-size: 11px; line-height: 17px; text-align: center; font-weight: 600; }
@@ -314,8 +314,10 @@ textarea.field { resize: none; line-height: 1.5; display: block; }
 
 /* iOS 26 滚动边缘：底部 Tab 栏下方渐隐，让透出的内容不显得乱 */
 #app::after { content: ""; position: fixed; z-index: 45; left: 0; right: 0; bottom: 0; pointer-events: none;
-  height: calc(var(--tabbar-h) + var(--safe-b) + 28px);
-  background: linear-gradient(to top, var(--bg) 0%, color-mix(in srgb, var(--bg) 70%, transparent) 45%, transparent 100%); }
+  height: calc(var(--tabbar-h) + var(--safe-b) + 10px + 36px);
+  /* Tab 栏下沿以下完全不透（不让文字从玻璃栏和 Safari 工具栏之间露出来），Tab 栏上方 36px 渐隐 */
+  background: linear-gradient(to top, var(--bg) 0, var(--bg) calc(var(--safe-b) + 10px + var(--tabbar-h) * .5),
+    color-mix(in srgb, var(--bg) 82%, transparent) calc(var(--safe-b) + 10px + var(--tabbar-h)), transparent 100%); }
 .scrim.stacked { background: rgba(0,0,0,.42); }
 html.scrolled .demo-flag { opacity: 0; pointer-events: none; }
 html.kb-open .sheet { padding-bottom: 0; }
@@ -324,3 +326,5 @@ html.kb-open .tabbar, html.kb-open #app::after { opacity: 0; pointer-events: non
 html.sheet-open .demo-flag { opacity: 0; pointer-events: none; }
 /* 弹层接近实心（iOS 表单弹层），避免背后彩色图片透出来干扰阅读 */
 .sheet.glass { background: color-mix(in srgb, var(--bg) 93%, transparent); }
+/* 紧凑顶栏更实一些：背后滚过的大字不能读出来 */
+.topbar.glass { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
