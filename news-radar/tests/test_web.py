@@ -150,6 +150,9 @@ class WebTests(ServerBase):
         _, f, _ = self.req('/api/feed?after=%d' % p['top'])
         self.assertEqual([i['id'] for i in f['items']], [new])
         self.assertEqual(self.req('/api/pulse', cookie=False)[0], 401)
+        with store.opened() as db:
+            store.set_setting(db, 'push_threshold', 5)
+        self.assertNotEqual(self.req('/api/pulse')[1]['status'], p2['status'])
 
     def test_csrf(self):
         r = urllib.request.Request(self.base + '/api/settings', data=b'{"push_threshold":1}',

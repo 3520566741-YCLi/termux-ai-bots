@@ -92,7 +92,7 @@
 |---|---|---|
 | GET | `/api/feed?min=3&watched=1&market=stock&q=英伟达&before=123&limit=50` | 参数都可选。`min` 最低分（默认 0），`watched=1` 只看命中关注的，`pushed=1` 只看推送过的，`before` 翻页（取 id 小于它的）。返回 `{"items": [Item], "next_before": 98}`（没有更多时 `null`）。按 id 倒序 |
 | GET | `/api/feed?after=123` | 只要 id 比 123 新的（实时刷新时补新条目，其他参数照常可加） |
-| GET | `/api/pulse` | **实时刷新用，很便宜**。返回 `{"feed": "1234.80.5.60.2.0", "top": 1234, "saved": "12.1764000000", "digest": 7, "chat": 55}`，每块一个版本号，变了才去拉那一块：`top` 变了用 `feed?after=旧top` 补新条目；`feed` 变了但 `top` 没变（打分/推送/配图/过夜瘦身）就重拉当前第一页；`saved`/`digest`/`chat` 同理。带 `ETag`：请求时发 `If-None-Match: <上次的 ETag>`，没变化回 **304 空响应**。建议：页面可见时每 5 秒一次，切回前台立刻一次，隐藏时停；断网失败按 5→10→20→30 秒退避重试 |
+| GET | `/api/pulse` | **实时刷新用，很便宜**。返回 `{"feed": "1234.80.5.60.2.0", "top": 1234, "saved": "12.1764000000", "digest": 7, "chat": 55, "status": "a1b2c3d4e5f6"}`，每块一个版本号，变了才去拉那一块：`top` 变了用 `feed?after=旧top` 补新条目；`feed` 变了但 `top` 没变（打分/推送/配图/过夜瘦身）就重拉当前第一页；`saved`/`digest`/`chat` 同理；`status` 变了（设置、关注、静音、记忆、待批准设备、收藏数、Notion/TG 连接配置；心跳不算）就重拉 `/api/status`。带 `ETag`：请求时发 `If-None-Match: <上次的 ETag>`，没变化回 **304 空响应**。建议：页面可见时每 5 秒一次，切回前台立刻一次，隐藏时停；断网失败按 5→10→20→30 秒退避重试 |
 | GET | `/img/<名字>` | 配图（需登录）。名字只来自 Item.image |
 | GET | `/api/item/123` | `{"item": Item, "dups": [{"title": "", "source_label": "", "url": "", "tier": "B", "published": 0}]}`（dups = 去重时合并进来的其他来源报道） |
 

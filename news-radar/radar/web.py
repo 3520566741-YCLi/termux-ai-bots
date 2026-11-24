@@ -202,8 +202,18 @@ def pulse() -> dict:
         saved_n = db.execute('SELECT COUNT(*), COALESCE(MAX(saved), 0) FROM items WHERE saved IS NOT NULL').fetchone()
         dig = db.execute('SELECT COALESCE(MAX(id), 0) FROM digests').fetchone()[0]
         chat = db.execute('SELECT COALESCE(MAX(id), 0) FROM chat').fetchone()[0]
+        # 设置/关注/静音/记忆/待批准设备：只在用户或 Mac 同步改动时变，心跳不算
+        st = [db.execute('SELECT group_concat(k || "=" || v, ";") FROM (SELECT k, v FROM settings ORDER BY k)').fetchone()[0],
+              db.execute('SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(SUM(length(symbols) + length(keywords)), 0) FROM watch').fetchone(),
+              db.execute('SELECT COUNT(*), COALESCE(MAX(updated), 0) FROM memories WHERE deleted = 0').fetchone(),
+              db.execute('SELECT COUNT(*), COALESCE(SUM(approved), 0) FROM devices').fetchone()]
+    try:
+        env_m = config.ENV_FILE.stat().st_mtime_ns   # Notion/Telegram 连接配置改了
+    except OSError:
+        env_m = 0
+    status_v = hashlib.sha1(json.dumps([[tuple(x) if x is not None and not isinstance(x, str) else x for x in st], env_m, saved_n[0]]).encode()).hexdigest()[:12]
     feed_v = '%d.%d.%d.%d.%d.%d' % (top, r[0], r[1], r[2], r[3], r[4])
-    return {'feed': feed_v, 'top': top, 'saved': '%d.%d' % (saved_n[0], int(saved_n[1])), 'digest': dig, 'chat': chat}
+    return {'feed': feed_v, 'top': top, 'saved': '%d.%d' % (saved_n[0], int(saved_n[1])), 'digest': dig, 'chat': chat, 'status': status_v}
 
 
 def pulse_etag(p: dict) -> str:
