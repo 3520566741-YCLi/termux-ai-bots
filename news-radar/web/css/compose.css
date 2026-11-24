@@ -1,1 +1,80 @@
-/* compose */
+/* 讨论文案弹层（R.compose.open）。全部以 .cp-sheet / .compose 为前缀 */
+
+.cp-sheet { transition: transform .5s var(--ease), bottom .25s var(--ease-out), max-height .25s var(--ease-out); }
+.cp-sheet.kb-open { padding-bottom: 0; }
+.cp-sheet .sheet-body { padding-bottom: 12px; }
+
+.compose > * + * { margin-top: 12px; }
+
+/* 引用 */
+.compose .cp-quote { position: relative; padding: 2px 4px 2px 12px; }
+.compose .cp-quote::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; border-radius: 2px; background: var(--fill-2); }
+.compose .cp-quote-t { font-size: 13px; line-height: 18px; color: var(--ink-2); }
+
+/* 风格分段 */
+.compose .cp-seg { background: var(--fill); overflow: hidden; }
+.compose .cp-seg button { flex: 1 1 0; min-width: 0; height: 34px; padding: 0 8px; font-size: 14px; }
+.compose .cp-seg button.press:active, .compose .cp-seg button.press.is-pressed { transform: none; opacity: .6; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .compose .cp-seg .seg-thumb { background: var(--fill-2); box-shadow: inset 0 .5px 0 var(--glass-hi), 0 2px 8px rgba(0,0,0,.3); }
+}
+:root[data-theme="dark"] .compose .cp-seg .seg-thumb { background: var(--fill-2); box-shadow: inset 0 .5px 0 var(--glass-hi), 0 2px 8px rgba(0,0,0,.3); }
+
+/* 补充要求 */
+.compose .cp-extra { font-size: 16px; background: var(--fill); text-overflow: ellipsis; }
+
+/* 生成按钮 */
+.compose .cp-gen { font-size: 16px; }
+.compose .cp-gen-ic { display: inline-flex; }
+.compose .cp-gen.is-busy .cp-gen-ic { display: none; }
+.compose .cp-gen.is-busy { opacity: .6; }
+
+/* 文案区：各状态等高，切换时弹层不跳 */
+.compose .cp-out { position: relative; min-height: 168px; border-radius: var(--r-md); background: var(--bg-2); }
+.compose .cp-text { min-height: 168px; padding: 12px 14px; font-size: 16px; line-height: 24px; background: var(--bg-2);
+  border-radius: var(--r-md); overflow: hidden; overflow-wrap: anywhere; animation: cp-in .35s var(--ease-out); }
+@keyframes cp-in { from { opacity: 0; } to { opacity: 1; } }
+
+.compose .cp-empty { min-height: 168px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 18px 24px; color: var(--ink-2); }
+.compose .cp-empty-ic { width: 40px; height: 40px; border-radius: 13px; display: grid; place-items: center; background: var(--fill); color: var(--ink-2); margin-bottom: 10px; }
+.compose .cp-empty-t { font-size: 15px; font-weight: 600; color: var(--ink); }
+.compose .cp-empty-s { font-size: 13px; line-height: 18px; margin-top: 4px; max-width: 280px; }
+
+.compose .cp-loading-wrap { min-height: 168px; padding: 16px 14px 14px; display: flex; flex-direction: column; }
+.compose .cp-loading .sk + .sk { margin-top: 10px; }
+.compose .cp-writing { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 14px; font-size: 13px; color: var(--ink-2); }
+.compose .cp-dots { display: inline-flex; gap: 3px; flex: none; }
+.compose .cp-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--tint); animation: cp-dot 1.2s infinite ease-in-out; }
+.compose .cp-dots i:nth-child(2) { animation-delay: .15s; }
+.compose .cp-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes cp-dot { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+.compose .cp-err { min-height: 168px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 16px 24px; }
+.compose .cp-err-ic { width: 40px; height: 40px; border-radius: 13px; display: grid; place-items: center; margin-bottom: 8px;
+  color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.compose .cp-err-t { font-size: 15px; font-weight: 600; }
+.compose .cp-err-s { font-size: 13px; line-height: 18px; color: var(--ink-2); margin: 3px 0 12px; max-width: 290px; }
+
+/* 字数 */
+.compose .cp-meta { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 6px; padding: 0 4px;
+  font-size: 12px; line-height: 16px; color: var(--ink-2); }
+.compose .cp-count-l { min-width: 0; }
+.compose .cp-count-r { flex: none; }
+.compose .cp-meta.over { color: var(--red); font-weight: 600; }
+
+/* 底部按钮 */
+.cp-foot { display: flex; gap: 10px; }
+.cp-foot .btn { font-size: 16px; padding: 0 16px; min-height: 50px; }
+.cp-foot .cp-copy { flex: none; min-width: 116px; }
+.cp-foot .cp-copy.done { color: var(--green); }
+.cp-foot .cp-send { flex: 1; min-width: 0; }
+.cp-foot .cp-send > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.cp-foot .cp-send.cp-setup { background: var(--fill); color: var(--tint); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-sheet { transition: transform .2s; }
+  .compose .cp-dots i, .compose .cp-text { animation: none; }
+  .compose .cp-seg .seg-thumb { transition: none; }
+}
+.cp-foot-note { font-size: 13px; line-height: 18px; color: var(--red); font-weight: 600; text-align: center; margin: 0 4px 10px; }

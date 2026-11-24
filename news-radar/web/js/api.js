@@ -4,13 +4,9 @@
    - 演示模式：网址带 ?demo=1（本次会话记住），所有请求交给 R.mock，不发网络请求 */
 'use strict';
 (function (R) {
-  const qs = new URLSearchParams(location.search);
-  try {
-    if (qs.get('demo') === '1') sessionStorage.setItem('radar-demo', '1');
-    if (qs.get('demo') === '0') sessionStorage.removeItem('radar-demo');
-  } catch (_) { /* 隐私模式可能不让存 */ }
-  let demo = false;
-  try { demo = sessionStorage.getItem('radar-demo') === '1'; } catch (_) { demo = qs.get('demo') === '1'; }
+  // 只认网址里的 ?demo=1（页签切换会保留 search），不记在 sessionStorage，免得去掉参数后还停在假数据里
+  const demo = new URLSearchParams(location.search).get('demo') === '1';
+  try { sessionStorage.removeItem('radar-demo'); } catch (_) { /* 清掉旧版本留下的标记 */ }
 
   class ApiError extends Error {
     constructor(message, status, offline) { super(message); this.status = status || 0; this.offline = !!offline; }
@@ -39,7 +35,8 @@
     try { data = await res.json(); } catch (_) { data = null; }
     if (res.status === 401) { R.emit('auth', data && data.error); throw new ApiError((data && data.error) || '需要登录', 401); }
     if (!res.ok) throw new ApiError((data && data.error) || `出错了（${res.status}）`, res.status);
-    return data || {};
+    if (!data || typeof data !== 'object') throw new ApiError('雷达返回的数据不对，请稍后再试。', res.status);
+    return data;
   }
 
   R.api = {
@@ -47,8 +44,8 @@
     ApiError,
     get: (path, opt) => request('GET', path, null, opt),
     post: (path, body, opt) => request('POST', path, body, opt),
-    enterDemo() { try { sessionStorage.setItem('radar-demo', '1'); } catch (_) { /* ignore */ } location.replace(location.pathname + '?demo=1'); },
-    exitDemo() { try { sessionStorage.removeItem('radar-demo'); } catch (_) { /* ignore */ } location.replace(location.pathname); },
+    enterDemo() { location.replace(location.pathname + '?demo=1'); },
+    exitDemo() { location.replace(location.pathname); },
 
     // 便捷封装
     status: () => request('GET', '/api/status'),
@@ -75,6 +72,15 @@
     tgGroups: () => request('GET', '/api/config/tg/groups', null, { timeout: 30000 }),
     tgChat: body => request('POST', '/api/config/tg/chat', body),
     configClear: what => request('POST', '/api/config/clear', { what }),
+    save: (item_id, note) => request('POST', '/api/save', note != null ? { item_id, note } : { item_id }),
+    unsave: item_id => request('POST', '/api/unsave', { item_id }),
+    saved: p => request('GET', '/api/saved?' + new URLSearchParams(Object.entries(p || {}).filter(([, v]) => v !== '' && v != null))),
+    memories: () => request('GET', '/api/memories'),
+    memorySave: body => request('POST', '/api/memories/save', body),
+    memoryUpdate: body => request('POST', '/api/memories/update', body),
+    memoryDelete: uid => request('POST', '/api/memories/delete', { uid }),
+    deviceApprove: id => request('POST', '/api/devices/approve', { id }),
+    deviceRemove: id => request('POST', '/api/devices/remove', { id }),
     login: token => request('POST', '/api/login', { token }),
   };
 })(window.R);

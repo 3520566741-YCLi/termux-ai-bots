@@ -26,11 +26,13 @@
     tickers: r[6], matched: r[7], published: T - r[8] * 60, fetched: T - r[8] * 60 + 8, title: r[9], summary: r[10],
     confirms: r[11], pushed: r[12] ? T - r[8] * 60 + 12 : null, url: 'https://example.com/news/' + (1000 - i),
     reason: r[12] ? '首次报道，A/B 级来源已确认' : '', late_minutes: i === 8 ? 7 : 0, notion_url: i === 1 ? 'https://www.notion.so/demo' : '',
+    image: [0, 1, 2, 5, 6, 8].includes(i) ? 'demo/n' + ([0, 1, 2, 5, 6, 8].indexOf(i) + 1) + '.jpg' : '', image_w: 900, image_h: 506,
+    saved: i === 1 || i === 5 ? T - i * 3000 : null, note: i === 1 ? '等交付数据出来再看' : '',
   }));
   // 更多旧消息，用于翻页
   for (let i = 0; i < 40; i++) {
     const b = raw[i % raw.length];
-    items.push({ ...items[i % raw.length], id: 980 - i, published: T - (300 + i * 25) * 60, fetched: T - (300 + i * 25) * 60, pushed: null, title: b[9] + '（较早）', notion_url: '' });
+    items.push({ ...items[i % raw.length], id: 980 - i, published: T - (600 + i * 60) * 60, fetched: T - (600 + i * 60) * 60, pushed: null, title: b[9] + '（较早）', notion_url: '', saved: null, note: '', image: '', summary: '', slim: (600 + i * 60) * 60 > 86400, reason: '', confirms: 0 });
   }
 
   const status = {
@@ -58,7 +60,20 @@
     notion: { configured: true, title: '资讯雷达存档' },
     tg: { configured: false, bot: '', chat_title: '' },
     today: { items: 3456, pushed: 3 },
+    memory: { count: 4, devices: 1, pending_devices: 1 },
+    saved: { count: 2 },
   };
+  let memories = [
+    { uid: 'm1', text: 'Mitchell 不碰港股，只看美股和加密货币', kind: '投资', created: T - 86400 * 9, updated: T - 86400 * 9, origin: 'mac:a1b2c3d4' },
+    { uid: 'm2', text: '更关心英伟达和特斯拉的财报、管理层变动', kind: '投资', created: T - 86400 * 3, updated: T - 86400 * 2, origin: 'phone' },
+    { uid: 'm3', text: '晚上 11 点后除非 5 分消息，否则别推送', kind: '习惯', created: T - 86400, updated: T - 86400, origin: 'phone' },
+    { uid: 'm4', text: '讨论文案喜欢口语化、少用感叹号', kind: '偏好', created: T - 3600 * 5, updated: T - 3600 * 5, origin: 'mac:a1b2c3d4' },
+  ];
+  let devices = [
+    { id: 'a1b2c3d4', name: 'YCLideMacBook-Pro', approved: true, created: T - 86400 * 10, last_seen: T - 600 },
+    { id: 'e5f6a7b8', name: 'Mac-mini', approved: false, created: T - 900, last_seen: T - 900 },
+  ];
+  const memStat = () => { status.memory = { count: memories.length, devices: devices.filter(d => d.approved).length, pending_devices: devices.filter(d => !d.approved).length }; };
 
   const digests = [
     { id: 7, title: '11月24日 午报', created: T - 2 * 3600, n_items: 86, notion_url: '' },
@@ -87,7 +102,7 @@
   }
 
   let chat = [
-    { role: 'assistant', text: '你好，我是资讯雷达。可以直接告诉我想关注什么、想怎么推送，比如“加上苹果”“静音两小时”“只推 5 分的”。', ts: T - 3600 },
+    { role: 'assistant', text: '你好，我是 Vesper。可以直接告诉我想关注什么、想怎么推送，比如“加上苹果”“静音两小时”“只推 5 分的”。', ts: T - 3600 },
     { role: 'user', text: '把门槛调到 4 分', ts: T - 3500 },
     { role: 'assistant', text: '好的，已把推送门槛设为 4 分：只有“重要”和“极重大”的消息才会推到手机。', ts: T - 3490, changes: ['推送门槛：4 分'] },
   ];
@@ -164,8 +179,9 @@
       const text = String(body.text || '');
       chat.push({ role: 'user', text, ts: now() });
       let reply = '收到。目前演示模式下我只会模拟回答。', changes = [];
+      const rem = text.match(/记住[:：\s]*(.+)/);
       const add = text.match(/(?:加上|关注|添加)\s*([一-龥A-Za-z]+)/);
-      if (add) {
+      if (rem) { memories.unshift({ uid: 'm' + (nextId++), text: rem[1].trim(), kind: '', created: now(), updated: now(), origin: 'phone' }); memStat(); reply = '好，我记住了。'; changes.push('记住了：' + rem[1].trim()); } else if (add) {
         const name = add[1];
         if (!status.watch.find(w => w.name === name)) status.watch.push({ id: nextId++, name, kind: 'stock', symbols: [], keywords: [name] });
         reply = `已加入关注：${name}。之后和它有关的重要消息会优先推给你。`; changes.push('加入关注：' + name);
@@ -218,6 +234,36 @@
       if (body.what === 'tg') status.tg = { configured: false, bot: '', chat_title: '' };
       return { ok: true };
     }
+    if (method === 'POST' && p === '/api/save') {
+      const it = items.find(x => x.id === body.item_id); if (!it) fail('这条消息已经不在了');
+      if (!it.saved) it.saved = now(); if (body.note != null) it.note = String(body.note);
+      status.saved.count = items.filter(x => x.saved).length; return { item: clone(it) };
+    }
+    if (method === 'POST' && p === '/api/unsave') {
+      const it = items.find(x => x.id === body.item_id); if (it) { it.saved = null; it.note = ''; }
+      status.saved.count = items.filter(x => x.saved).length; return { ok: true };
+    }
+    if (method === 'GET' && p === '/api/saved') {
+      if (empty) return { items: [], next_before: null };
+      const kw = (q.get('q') || '').toLowerCase(), before = +q.get('before') || Infinity, limit = Math.min(+q.get('limit') || 30, 100);
+      let list = items.filter(x => x.saved && x.saved < before).sort((a, b) => b.saved - a.saved);
+      if (kw) list = list.filter(it => (it.title + it.summary + (it.note || '') + it.tickers.join(' ')).toLowerCase().includes(kw));
+      const page = list.slice(0, limit);
+      return { items: clone(page), next_before: list.length > limit ? page[page.length - 1].saved : null };
+    }
+    if (method === 'GET' && p === '/api/memories') return empty ? { memories: [], devices: [] } : { memories: clone(memories), devices: clone(devices) };
+    if (method === 'POST' && p === '/api/memories/save') {
+      if (!String(body.text || '').trim()) fail('内容不能为空');
+      const m = { uid: 'm' + (nextId++), text: String(body.text).trim(), kind: body.kind || '', created: now(), updated: now(), origin: 'phone' };
+      memories.unshift(m); memStat(); return { memory: clone(m) };
+    }
+    if (method === 'POST' && p === '/api/memories/update') {
+      const m = memories.find(x => x.uid === body.uid); if (!m) fail('这条记忆已经不在了');
+      m.text = String(body.text || '').trim(); m.updated = now(); return { memory: clone(m) };
+    }
+    if (method === 'POST' && p === '/api/memories/delete') { memories = memories.filter(x => x.uid !== body.uid); memStat(); return { ok: true }; }
+    if (method === 'POST' && p === '/api/devices/approve') { const d = devices.find(x => x.id === body.id); if (d) d.approved = true; memStat(); return { ok: true }; }
+    if (method === 'POST' && p === '/api/devices/remove') { devices = devices.filter(x => x.id !== body.id); memStat(); return { ok: true }; }
     if (method === 'POST' && p === '/api/login') return { ok: true };
     fail('演示模式没有这个接口：' + p);
   }
@@ -227,7 +273,7 @@
     setInterval(() => {
       const base = raw[Math.floor(Math.random() * 7)];
       const top = items[0].id + 1;
-      items.unshift({ ...items[0], id: top, score: base[0] || 3, title: '【新】' + base[9], summary: base[10], published: now(), fetched: now(), pushed: null, notion_url: '' });
+      items.unshift({ ...items[0], id: top, score: base[0] || 3, title: '【新】' + base[9], summary: base[10], published: now(), fetched: now(), pushed: null, notion_url: '', saved: null, note: '', image: Math.random() < .5 ? 'demo/n7.jpg' : '' });
     }, 40000);
   }
 

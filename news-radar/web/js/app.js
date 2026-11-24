@@ -6,7 +6,7 @@
 (function (R) {
   R.pages = R.pages || {};
   R.state = { status: null, page: null };
-  const TABS = ['feed', 'digest', 'chat', 'settings'];
+  const TABS = ['feed', 'digest', 'vault', 'chat', 'settings'];
   const scrollMemo = {};
   const mounted = {};
 
@@ -55,6 +55,7 @@
     requestAnimationFrame(() => {
       ticking = false;
       R.$('#topbar').classList.toggle('show', window.scrollY > 48);
+      document.documentElement.classList.toggle('scrolled', window.scrollY > 8);
     });
   }
   window.addEventListener('scroll', onScroll, { passive: true });
@@ -85,7 +86,9 @@
   });
   R.$('#login-form').addEventListener('submit', async e => {
     e.preventDefault();
-    const token = R.$('#login-token').value.trim();
+    const input = R.$('#login-token');
+    const token = input.value.trim();
+    input.value = '';   // 口令只在这一次请求里用，提交后立刻清空
     const err = R.$('#login-err');
     if (!token) { err.textContent = '请输入口令'; return; }
     err.textContent = '';
@@ -93,6 +96,7 @@
       await R.busy(R.$('#login-btn'), R.api.login(token));
       location.reload();
     } catch (ex) {
+      input.focus();
       err.textContent = ex.status === 401 || ex.status === 403 ? '口令不对，再试一次' : ex.message;
       R.haptic('heavy');
     }

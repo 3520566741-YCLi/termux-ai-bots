@@ -7,7 +7,7 @@ window.R = window.R || {};
   // ---------- 图标（内联 SVG 路径，SF Symbols 风格线条） ----------
   const ICONS = {
     news: 'M4 5h12v14H6a2 2 0 0 1-2-2V5zM16 9h4v8a2 2 0 0 1-2 2h-2M7 9h6M7 13h6M7 16h4',
-    digest: 'M12 3l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 15.4 7.2 17.9l.9-5.4L4.2 8.7l5.4-.8z',
+    digest: 'M4 4h16v16H4zM4 9h16M8 13h8M8 16.5h5',
     chat: 'M21 12a8 8 0 0 1-11.8 7L4 20l1.1-4.6A8 8 0 1 1 21 12z',
     gear: 'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM19.4 13.5l1.6 1.2-2 3.4-1.9-.7a7 7 0 0 1-2 1.2L14.8 21h-4l-.3-2a7 7 0 0 1-2-1.2l-1.9.7-2-3.4 1.6-1.2a7 7 0 0 1 0-2.4L4.6 10l2-3.4 1.9.7a7 7 0 0 1 2-1.2l.3-2.1h4l.3 2a7 7 0 0 1 2 1.2l1.9-.7 2 3.4-1.6 1.2a7 7 0 0 1 0 2.4z',
     filter: 'M4 6h16M7 12h10M10 18h4',
@@ -49,6 +49,11 @@ window.R = window.R || {};
     gauge: 'M4 18a8 8 0 1 1 16 0M12 18l4-6',
     phone: 'M7 2h10v20H7zM11 18h2',
     stack: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5',
+    more: 'M5 12h.01M12 12h.01M19 12h.01',
+    arrowUp: 'M12 19V5M6 11l6-6 6 6',
+    vault: 'M6 3h12v18l-6-4-6 4z',
+    bookmark: 'M6 3h12v18l-6-4-6 4z',
+    image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15 9.5a1.5 1.5 0 1 0 0-.01',
   };
   const SVGNS = 'http://www.w3.org/2000/svg';
   R.icon = function (name, cls) {
@@ -71,7 +76,7 @@ window.R = window.R || {};
     for (const k in attrs || {}) {
       const v = attrs[k];
       if (v == null || v === false) continue;
-      if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
+      if (k.startsWith('on')) { if (typeof v === 'function') node.addEventListener(k.slice(2), v); continue; }   // 不写 on* 属性（防注入）
       else if (k === 'class') node.className += (node.className ? ' ' : '') + v;
       else if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
       else if (k === 'dataset') Object.assign(node.dataset, v);
@@ -138,13 +143,15 @@ window.R = window.R || {};
     const scrim = R.el('div.scrim');
     const closeBtn = R.el('button.icon-btn.plain.press', { 'aria-label': '关闭', style: { width: '36px', height: '36px' } }, R.icon('close', 'sm'));
     const body = R.el('div.sheet-body', opt.body);
-    const sheet = R.el('section.sheet.glass.strong', { role: 'dialog', 'aria-modal': 'true', 'aria-label': opt.title || '' },
+    const sheet = R.el('section.sheet.glass.strong' + (opt.className ? '.' + String(opt.className).split(/\s+/).join('.') : ''), { role: 'dialog', 'aria-modal': 'true', 'aria-label': opt.title || '' },
       R.el('div.grabber'),
       R.el('div.sheet-head', R.el('h2', opt.title || ''), closeBtn),
       body,
       opt.foot ? R.el('div.sheet-foot', opt.foot) : null);
+    if (stack.length) scrim.classList.add('stacked');
     document.body.append(scrim, sheet);
     document.documentElement.style.overflow = 'hidden';
+    document.documentElement.classList.add('sheet-open');
     requestAnimationFrame(() => requestAnimationFrame(() => { scrim.classList.add('show'); sheet.classList.add('show'); }));
     let done = false;
     const api = {
@@ -155,7 +162,7 @@ window.R = window.R || {};
         sheet.style.transform = '';
         setTimeout(() => { scrim.remove(); sheet.remove(); }, 450);
         const i = stack.indexOf(api); if (i >= 0) stack.splice(i, 1);
-        if (!stack.length) document.documentElement.style.overflow = '';
+        if (!stack.length) { document.documentElement.style.overflow = ''; document.documentElement.classList.remove('sheet-open'); }
         opt.onClose && opt.onClose();
       },
     };
@@ -182,6 +189,19 @@ window.R = window.R || {};
     });
     return api;
   };
+  // 键盘：用 visualViewport 算出键盘高度，写到 --kb / --vvh，弹层据此上移，不被键盘挡住
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+    const onVV = () => {
+      const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      const root = document.documentElement.style;
+      root.setProperty('--kb', (kb > 80 ? kb : 0) + 'px');
+      root.setProperty('--vvh', vv.height + 'px');
+      document.documentElement.classList.toggle('kb-open', kb > 80);
+    };
+    vv.addEventListener('resize', onVV); vv.addEventListener('scroll', onVV); onVV();
+  }
+  R.closeAllSheets = function () { stack.slice().reverse().forEach(s => s.close()); };
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && stack.length) stack[stack.length - 1].close(); });
 
 
@@ -221,7 +241,7 @@ window.R = window.R || {};
       R.el('div.state-icon', R.icon(o.icon || (o.err ? 'warn' : 'inbox'))),
       R.el('h3', o.title || ''),
       o.text ? R.el('p', o.text) : null,
-      o.action ? R.el('button.btn.press' + (o.action.primary ? '.primary' : ''), { onclick: o.action.onClick }, o.action.label) : null,
+      o.action ? R.el('button.btn.press' + (o.action.primary ? '.primary' : ''), { onclick: o.action.onClick, class: o.action.className || null, dataset: o.action.dataset || null }, o.action.label) : null,
       o.action2 ? R.el('div', { style: { marginTop: '10px' } }, R.el('button.btn.sm.press', { onclick: o.action2.onClick, style: { background: 'none' } }, o.action2.label)) : null);
   };
   R.errorBlock = function (err, retry) {
@@ -237,6 +257,7 @@ window.R = window.R || {};
 
   // 按钮忙碌态：await R.busy(btn, promise)
   R.busy = async function (btn, p) {
+    if (!btn) return p;
     btn.classList.add('is-busy'); btn.setAttribute('aria-busy', 'true');
     let sp = btn.querySelector('.spinner');
     if (!sp) { sp = R.el('span.spinner'); btn.prepend(sp); }
@@ -255,6 +276,7 @@ window.R = window.R || {};
 
   // 只允许 http(s) 链接，防止 javascript: 之类
   R.safeUrl = function (u) {
+    if (!u || !String(u).trim()) return '';
     try { const x = new URL(u, location.href); return /^https?:$/.test(x.protocol) ? x.href : ''; } catch (_) { return ''; }
   };
   R.openUrl = function (u) { const s = R.safeUrl(u); if (s) window.open(s, '_blank', 'noopener'); };
@@ -262,7 +284,8 @@ window.R = window.R || {};
   // 简单事件总线：R.on('status', fn) / R.emit('status', data)
   const bus = {};
   R.on = (ev, fn) => { (bus[ev] = bus[ev] || []).push(fn); };
-  R.emit = (ev, data) => { (bus[ev] || []).forEach(fn => { try { fn(data); } catch (e) { console.error(e); } }); };
+  R.off = (ev, fn) => { const l = bus[ev]; const i = l ? l.indexOf(fn) : -1; if (i >= 0) l.splice(i, 1); };
+  R.emit = (ev, data) => { (bus[ev] || []).slice().forEach(fn => { try { fn(data); } catch (e) { console.error(e); } }); };
 
   R.scoreText = s => ({ 5: '极重大', 4: '重要', 3: '值得一看', 2: '一般', 1: '噪音' })[s] || '未打分';
   R.tierText = t => ({ A: '官方', B: '媒体', C: '社交' })[t] || '';

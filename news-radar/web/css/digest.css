@@ -1,1 +1,144 @@
-/* digest */
+/* 资讯雷达 · 日报页（只用 base.css 的变量；全部以 #page-digest 或 .dg- 前缀） */
+
+#page-digest .dg-sub { flex-wrap: wrap; row-gap: 4px; }
+#page-digest .dg-sub-t { min-width: 0; overflow-wrap: anywhere; }
+#page-digest .dg-back { position: relative; border: 0; margin-left: 2px; }
+#page-digest .dg-back::after { content: ""; position: absolute; inset: -11px -6px; }
+
+/* 生成中 / 生成失败提示 */
+#page-digest .dg-banner { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 16px; margin-bottom: 12px; }
+#page-digest .dg-banner .spinner { color: var(--tint); flex: none; }
+#page-digest .dg-banner .grow { flex: 1; min-width: 0; }
+#page-digest .dg-banner-t { font-size: 15px; font-weight: 600; }
+#page-digest .dg-banner-s { font-size: 13px; color: var(--ink-2); margin-top: 1px; }
+#page-digest .dg-banner.is-err { background: color-mix(in srgb, var(--red) 10%, var(--bg-2)); }
+#page-digest .dg-banner.is-err > svg.i { color: var(--red); }
+#page-digest .dg-banner .btn.sm { flex: none; }
+#page-digest .dg-banner-x { width: 36px; height: 44px; margin: 0 -6px 0 -4px; background: none; color: var(--ink-2); }
+
+/* 头条卡 */
+#page-digest .dg-hero {
+  position: relative; overflow: hidden; border-radius: var(--r-xl); padding: 18px 18px 16px;
+  background:
+    radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--indigo) 14%, transparent) 0%, transparent 60%),
+    linear-gradient(150deg, color-mix(in srgb, var(--tint) 15%, var(--bg-2)) 0%, color-mix(in srgb, var(--tint) 5%, var(--bg-2)) 100%);
+  box-shadow: var(--card-shadow), inset 0 0 0 .5px color-mix(in srgb, var(--tint) 22%, transparent);
+}
+#page-digest .dg-hero-k { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: var(--tint); letter-spacing: .2px; }
+#page-digest .dg-hero-k svg.i { fill: currentColor; stroke-width: 1.4; }
+#page-digest .dg-hero-h { margin: 8px 0 10px; font-size: 22px; line-height: 1.34; font-weight: 700; letter-spacing: .1px; color: var(--ink); }
+#page-digest .dg-hero-m { font-size: 13px; color: var(--ink-2); }
+
+/* 操作区：头条卡下方一行 */
+#page-digest .dg-acts { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+#page-digest .dg-act {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  min-height: 66px; padding: 10px 6px; border: 0; border-radius: var(--r-md);
+  background: var(--bg-2); box-shadow: var(--card-shadow); color: var(--tint);
+}
+#page-digest .dg-act span:not(.spinner) { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.2; text-align: center; overflow-wrap: anywhere; }
+#page-digest .dg-act.is-on { background: var(--tint); color: var(--on-tint); }
+#page-digest .dg-act.is-on span { color: var(--on-tint); }
+#page-digest .dg-act[data-act="read"] svg.i { fill: currentColor; stroke-width: 1.2; width: 20px; height: 20px; }
+#page-digest .dg-act.is-busy { opacity: .5; pointer-events: none; }
+#page-digest .dg-act.is-busy svg.i { display: none; }
+#page-digest .dg-act .spinner { width: 20px; height: 20px; }
+
+/* 朗读字幕 */
+#page-digest .dg-caption { margin-top: 10px; padding: 12px 16px; border-left: 3px solid var(--tint); border-radius: var(--r-md); }
+#page-digest .dg-cap-n { font-size: 12px; font-weight: 600; color: var(--tint); font-variant-numeric: tabular-nums; }
+#page-digest .dg-cap-t { font-size: 16px; line-height: 1.45; margin-top: 3px; }
+
+/* 关注的标的 */
+#page-digest .dg-w { position: relative; padding: 14px 16px 12px; }
+#page-digest .dg-w + .dg-w::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; height: .5px; background: var(--sep); }
+#page-digest .dg-w-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+#page-digest .dg-w-name { font-size: 17px; font-weight: 600; min-width: 0; }
+#page-digest .dg-w-text { margin: 6px 0 0; font-size: 15px; line-height: 1.5; color: var(--ink); opacity: .86; }
+
+#page-digest .dg-trend { display: inline-flex; align-items: center; gap: 3px; flex: none; height: 24px; padding: 0 9px 0 7px; border-radius: 999px;
+  font-size: 13px; font-weight: 600; --c: var(--ink-2); color: var(--c); background: color-mix(in srgb, var(--c) 13%, transparent); }
+#page-digest .dg-trend svg.i { width: 14px; height: 14px; stroke-width: 2.4; }
+#page-digest .dg-trend[data-t="up"] { --c: color-mix(in srgb, var(--green) 78%, var(--ink)); }
+#page-digest .dg-trend[data-t="down"] { --c: color-mix(in srgb, var(--red) 85%, var(--ink)); }
+#page-digest .dg-trend[data-t="mixed"] { --c: var(--amber); }
+#page-digest .dg-trend[data-t="quiet"] { --c: var(--ink-2); }
+
+#page-digest .dg-rel { display: inline-flex; align-items: center; gap: 2px; min-height: 44px; margin: -4px 0 -10px; padding: 0 8px 0 0;
+  border: 0; background: none; font-size: 13px; font-weight: 500; color: var(--tint); }
+#page-digest .dg-rel svg.i { width: 11px; height: 11px; stroke-width: 2.6; }
+
+/* 重点消息 */
+#page-digest ol.dg-top, #page-digest ul.dg-next { list-style: none; margin: 0; padding: 0; }
+#page-digest .dg-top li { position: relative; }
+#page-digest .dg-top li + li::before { content: ""; position: absolute; top: 0; left: 52px; right: 0; height: .5px; background: var(--sep); z-index: 1; }
+#page-digest .dg-top-row { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 13px 14px 13px 16px; border: 0; background: none;
+  text-align: left; color: inherit; transition: background-color .2s; }
+#page-digest .dg-top-row .grow { flex: 1; min-width: 0; }
+#page-digest .dg-num { flex: none; width: 24px; height: 24px; margin-top: 1px; border-radius: 50%; display: grid; place-items: center;
+  font-family: var(--font-round); font-size: 14px; font-weight: 700; color: var(--tint); background: color-mix(in srgb, var(--tint) 13%, transparent);
+  font-variant-numeric: tabular-nums; }
+#page-digest .dg-top-t { font-size: 16px; font-weight: 600; line-height: 1.4; }
+#page-digest .dg-top-x { margin: 4px 0 0; font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+#page-digest .dg-chev { color: var(--ink-3); width: 14px; height: 14px; stroke-width: 2.6; margin-top: 5px; }
+
+/* 传闻待核实 */
+#page-digest .dg-r { position: relative; padding: 12px 16px 14px; }
+#page-digest .dg-r + .dg-r::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; height: .5px; background: var(--sep); }
+#page-digest .dg-r-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 24px; }
+#page-digest .dg-r-top .dg-rel { margin: -10px 0; }
+#page-digest .dg-r-text { margin: 8px 0 0; font-size: 16px; line-height: 1.45; }
+#page-digest .dg-r-check { margin: 8px 0 0; padding: 8px 12px; border-radius: var(--r-sm); background: var(--bg-3); font-size: 14px; line-height: 1.5; color: var(--ink-2); }
+#page-digest .dg-r-check b { font-weight: 600; color: var(--amber); }
+
+/* 接下来盯 */
+#page-digest .dg-n { position: relative; display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; font-size: 16px; line-height: 1.45; }
+#page-digest .dg-n + .dg-n::before { content: ""; position: absolute; top: 0; left: 46px; right: 0; height: .5px; background: var(--sep); }
+#page-digest .dg-n-box { flex: none; width: 18px; height: 18px; margin-top: 2px; border-radius: 6px; box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+#page-digest .dg-n .break { min-width: 0; }
+
+/* 页尾 */
+#page-digest .dg-foot { display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 30px 0 4px; text-align: center; }
+#page-digest .dg-foot p { margin: 0; font-size: 13px; color: var(--ink-2); }
+#page-digest .dg-foot .btn svg.i { width: 16px; height: 16px; }
+#page-digest .dg-foot .btn.is-busy svg.i { display: none; }
+
+/* 朗读中迷你胶囊：只在操作区滚出屏幕时出现，悬在 Tab 栏上方 10px */
+#page-digest .dg-mini {
+  position: fixed; z-index: 45; left: 50%; bottom: calc(var(--safe-b) + 10px + var(--tabbar-h) + 10px);
+  display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 6px 0 16px; border: 0; border-radius: 999px;
+  color: var(--ink); font-size: 14px; font-weight: 600; white-space: nowrap;
+  opacity: 0; pointer-events: none; transform: translate(-50%, 12px) scale(.96);
+  transition: opacity .25s, transform .45s var(--ease);
+}
+#page-digest .dg-mini.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+#page-digest .dg-mini.show.is-pressed { transform: translate(-50%, 0) scale(.96); }
+#page-digest .dg-mini-n { font-variant-numeric: tabular-nums; }
+#page-digest .dg-mini-stop { height: 32px; line-height: 32px; padding: 0 12px; border-radius: 999px; background: var(--tint); color: var(--on-tint); font-size: 13px; }
+#page-digest .dg-eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+#page-digest .dg-eq i { width: 3px; height: 100%; border-radius: 2px; background: var(--tint); animation: dg-eq 1s ease-in-out infinite; transform-origin: bottom; }
+#page-digest .dg-eq i:nth-child(2) { animation-delay: -.35s; }
+#page-digest .dg-eq i:nth-child(3) { animation-delay: -.7s; }
+@keyframes dg-eq { 0%, 100% { transform: scaleY(.35); } 50% { transform: scaleY(1); } }
+#page-digest.dg-mini-on { padding-bottom: calc(var(--tabbar-h) + var(--safe-b) + 40px + 54px); }
+@media (prefers-reduced-motion: reduce) {
+  #page-digest .dg-eq i { animation: none; transform: scaleY(.7); }
+  #page-digest .dg-mini { transition: opacity .2s; }
+}
+
+/* 骨架 */
+#page-digest .dg-skel-hero { border-radius: var(--r-xl); padding: 18px; }
+#page-digest .dg-skel-act { border-radius: var(--r-md); padding: 12px 8px; min-height: 66px; }
+#page-digest .dg-skel-list { border-radius: var(--r-md); padding: 0; }
+#page-digest .dg-skel-row { padding: 14px 16px; }
+#page-digest .dg-skel-row + .dg-skel-row { box-shadow: inset 0 .5px 0 var(--sep); }
+
+/* 弹层（挂在 body 上，所以不加 #page-digest 前缀） */
+.dg-hist .row { min-height: 60px; }
+.dg-hist .dg-check { color: var(--tint); width: 20px; height: 20px; stroke-width: 2.4; }
+.dg-hist .dg-check-ph { width: 20px; flex: none; }
+.dg-refs .dg-ref { align-items: flex-start; color: inherit; padding-top: 12px; padding-bottom: 12px; }
+.dg-refs .dg-ref + .dg-ref::before { left: 58px; }
+.dg-refs .dg-ref-t { font-size: 16px; line-height: 1.4; font-weight: 500; }
+.dg-refs .dg-ref-m { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 5px; }
+.dg-refs .dg-ref-go { color: var(--tint); margin-top: 6px; }
