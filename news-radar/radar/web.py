@@ -62,7 +62,18 @@ def locked() -> bool:
         return len(_fails) >= 10
 
 
-def note_fail() -> None:
+def take_attempt() -> bool:
+    """检查锁定和记一次尝试在同一把锁里做完：并发一大批请求也最多只有 10 次能试登录码。"""
+    with _fail_lock:
+        now = time.time()
+        _fails[:] = [t for t in _fails if now - t < 600]
+        if len(_fails) >= 10:
+            return False
+        _fails.append(now)
+        return True
+
+
+def note_fail() -> None:   # 测试和旧代码用
     with _fail_lock:
         _fails.append(time.time())
 
@@ -104,16 +115,29 @@ def use_code(given: str) -> bool:
             path.unlink(missing_ok=True)
             return False
         if not hmac.compare_digest(hashlib.sha256(given.encode()).hexdigest(), str(rec.get('h', ''))):
+            rec['bad'] = int(rec.get('bad', 0)) + 1
+            if rec['bad'] >= 5:
+                path.unlink(missing_ok=True)   # 猜错 5 次这个码就作废，要重新拿
+            else:
+                path.write_text(json.dumps(rec))
             return False
         path.unlink(missing_ok=True)   # 用一次就失效
         return True
 
 
-def check_login(given: str) -> bool:
-    given = (given or '').strip()
+def check_login(given: str) -> str:
+    """'ok' / 'bad' / 'locked'。长口令（144 位随机）猜不中，不受锁定影响，这样别人乱试也锁不住主人；
+    6 位登录码才计次数：10 分钟最多 10 次，一个码错 5 次作废。"""
+    given = (given or '').strip()[:200]
     if not given:
-        return False
-    return use_code(given) or hmac.compare_digest(given, token())
+        return 'bad'
+    if hmac.compare_digest(given.encode(), token().encode()):
+        return 'ok'
+    if not re.fullmatch(r'\d{6}', given):
+        return 'bad'
+    if not take_attempt():
+        return 'locked'
+    return 'ok' if use_code(given) else 'bad'
 
 
 class ApiError(Exception):
@@ -189,6 +213,9 @@ def feed(q: dict) -> dict:
     return {'items': [item_out(r, links) for r in rows], 'next_before': rows[-1]['id'] if more and rows else None}
 
 
+# 网页推送只接受浏览器厂商的推送服务器（防止被拿来往内网地址发请求）
+PUSH_HOST_RE = re.compile(r'^(web\.push\.apple\.com|fcm\.googleapis\.com|updates\.push\.services\.mozilla\.com|'
+                          r'[a-z0-9.-]+\.notify\.windows\.com|android\.googleapis\.com)$')
 PULSE_WINDOW = 300   # 只看最近 300 条的打分/推送/配图变化（走主键范围，很便宜）
 
 
@@ -409,7 +436,7 @@ def do_config_notion(env: dict, body: dict) -> dict:
         raise ApiError('数据库链接不对：在 Notion 里打开数据库，复制链接粘贴进来')
     test = dict(env, RADAR_NOTION_TOKEN=tok, RADAR_NOTION_DB=db_id)
     info = notion.check(test)
-    config.save_env({'RADAR_NOTION_TOKEN': tok, 'RADAR_NOTION_DB': db_id, 'RADAR_NOTION_TITLE': info['title'][:80]})
+    config.save_env({'RADAR_NOTION_TOKEN': tok, 'RADAR_NOTION_DB': db_id, 'RADAR_NOTION_TITLE': re.sub(r'[\r\n\x00]', ' ', info['title'])[:80]})
     return {'ok': True, 'title': info['title'], 'columns': info['columns']}
 
 
@@ -494,7 +521,8 @@ def handle_post(path: str, body: dict) -> dict:
     if path == '/api/push/subscribe':
         sub = body.get('subscription') or {}
         endpoint = _str(sub.get('endpoint'), 1000)
-        if not endpoint.startswith('https://') or not isinstance(sub.get('keys'), dict):
+        if not PUSH_HOST_RE.match(urlparse(endpoint).hostname or '') or not endpoint.startswith('https://') \
+                or not isinstance(sub.get('keys'), dict):
             raise ApiError('订阅信息不对')
         with store.opened() as db:
             db.execute('INSERT OR REPLACE INTO push_subs VALUES(?,?,?)', (endpoint, json.dumps(sub), time.time()))
@@ -641,6 +669,7 @@ def mem_post(path: str, headers, body: dict) -> dict:
 
 # ---------- HTTP ----------
 class Handler(BaseHTTPRequestHandler):
+    timeout = 20   # 慢吞吞不发完请求的连接 20 秒后断开（防 slowloris 占满线程）
     server_version = 'news-radar'
     sys_version = ''
     protocol_version = 'HTTP/1.1'
@@ -719,14 +748,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if url.path == '/login':
                 # 失败时回到首页的玻璃登录页，并说清是锁定还是口令不对（不再给白底纯文字）
-                if locked():
-                    return self.send(303, b'', 'text/plain', {'Location': '/?auth=locked'})
                 given = parse_qs(url.query).get('t', [''])[0]
-                if check_login(given):
+                res = check_login(given)
+                if res == 'ok':
                     return self.send(303, b'', 'text/plain', {'Location': '/', 'Set-Cookie': self.cookie_header()})
-                note_fail()
-                log.info('login_fail via=link len=%d', len(given))
-                return self.send(303, b'', 'text/plain', {'Location': '/?auth=bad'})
+                log.info('login_fail via=link len=%d res=%s', len(given), res)
+                return self.send(303, b'', 'text/plain', {'Location': '/?auth=' + res})
             if url.path == '/api/mem/sync':
                 return self.json(200, mem_get(self.headers, parse_qs(url.query)))
             if url.path == '/api/pulse':
@@ -755,8 +782,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.headers.get('X-Radar') != '1' or 'application/json' not in self.headers.get('Content-Type', ''):
                 return self.json(403, {'error': 'forbidden'})
-            length = int(self.headers.get('Content-Length') or 0)
-            if length > MAX_BODY:
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                return self.json(400, {'error': '请求不对'})
+            if length < 0 or length > MAX_BODY:   # 负数会让 read() 一直读到断开
                 return self.json(413, {'error': '内容太长'})
             try:
                 body = json.loads(self.rfile.read(length) or b'{}')
@@ -765,12 +795,12 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 return self.json(400, {'error': 'JSON 不对'})
             if url.path == '/api/login':
-                if locked():
-                    return self.json(429, {'error': '输错太多次，10 分钟后再试'})
                 given = str(body.get('token') or '')
-                if check_login(given):
+                res = check_login(given)
+                if res == 'ok':
                     return self.json(200, {'ok': True}, {'Set-Cookie': self.cookie_header()})
-                note_fail()
+                if res == 'locked':
+                    return self.json(429, {'error': '登录码输错太多次，10 分钟后再试（用长口令链接不受影响）'})
                 log.info('login_fail via=form len=%d', len(given.strip()))
                 return self.json(403, {'error': '口令或登录码不对（登录码 10 分钟内有效、只能用一次）'})
             if url.path in ('/api/mem/pair', '/api/mem/sync'):
@@ -791,11 +821,34 @@ def listen_addr() -> tuple:
     return host, port
 
 
+class Server(ThreadingHTTPServer):
+    """最多同时 32 个连接，多出来的直接关掉，线程和文件句柄不会被耗尽。"""
+    daemon_threads = True
+    request_queue_size = 64
+    _slots = threading.BoundedSemaphore(32)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 def serve() -> None:
     store.init()
     token()
     host, port = listen_addr()
-    srv = ThreadingHTTPServer((host, port), Handler)
+    srv = Server((host, port), Handler)
     srv.daemon_threads = True
     log.info('web_listen host=%s port=%s', host, port)
     srv.serve_forever()

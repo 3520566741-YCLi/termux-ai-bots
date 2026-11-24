@@ -68,6 +68,9 @@ def settings() -> dict:
 
 def save_env(updates: dict) -> None:
     """改 runtime/radar/.env 里的几个键（权限 600，值为空表示删除）。其他行原样保留。"""
+    for k, v in updates.items():   # 换行会在 .env 里多出一行别的键，直接拒绝
+        if any(ch in str(k) + str(v) for ch in '\r\n\x00'):
+            raise ValueError('配置值里不能有换行')
     ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
     try:
         lines = ENV_FILE.read_text(encoding='utf-8').splitlines()

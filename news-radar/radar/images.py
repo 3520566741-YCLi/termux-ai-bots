@@ -30,6 +30,7 @@ NAME_RE = re.compile(r'^[0-9a-f]{40}\.(jpg|png|webp|gif)$')
 OG_RE = re.compile(r'<meta[^>]+(?:property|name)=["\'](?:og:image(?::secure_url)?|twitter:image(?::src)?)["\'][^>]*>', re.I)
 CONTENT_RE = re.compile(r'content=["\']([^"\']+)["\']', re.I)
 NO_OG = ('gnews_en', 'gnews_zh', 'tg')
+MAX_PIXELS = 30_000_000
 
 
 def img_dir() -> Path:
@@ -45,8 +46,10 @@ def _public(host: str) -> bool:
         return False
     for info in infos:
         ip = ipaddress.ip_address(info[4][0].split('%')[0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified \
-                or (ip.version == 4 and ip in ipaddress.ip_network('100.64.0.0/10')):   # Tailscale 网段
+        if ip.version == 6 and ip.ipv4_mapped:      # ::ffff:10.0.0.1 这种写法也按 IPv4 查
+            ip = ip.ipv4_mapped
+        # 只放行公网地址：is_global 已排除内网、本机、链路本地、保留段、Tailscale 的 100.64/10 等；NAT64 另外挡
+        if not ip.is_global or ip.is_multicast or (ip.version == 6 and ip in ipaddress.ip_network('64:ff9b::/96')):
             return False
     return True
 
@@ -95,9 +98,19 @@ def shrink(data: bytes, ctype: str) -> tuple:
         from PIL import Image
     except ImportError:
         return data, TYPES[ctype], 0, 0
+    import warnings
+    Image.MAX_IMAGE_PIXELS = MAX_PIXELS
     try:
-        im = Image.open(io.BytesIO(data))
-        im.load()
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            # 只认这四种格式（不让 EPS/PSD 等走别的解码器），先看尺寸再解码，防“小文件解出超大图”吃光内存
+            im = Image.open(io.BytesIO(data), formats=['JPEG', 'PNG', 'WEBP', 'GIF'])
+            if im.size[0] * im.size[1] > MAX_PIXELS:
+                raise ValueError('too many pixels')
+            im.draft('RGB', (MAX_W * 2, MAX_W * 2))   # JPEG 直接按小尺寸解码，省内存
+            im.load()
+    except ValueError:
+        raise
     except Exception:
         raise ValueError('bad image')
     w, h = im.size
@@ -151,7 +164,7 @@ async def process(client: httpx.AsyncClient, items: list) -> int:
                 name, w, h = await fetch_for(client, it)
                 state = (name, w, h, 1)
                 got += 1
-            except (httpx.HTTPError, ValueError, OSError):
+            except Exception:   # 任何错都记成“没图”，不会每 15 秒重试同一条
                 state = ('', 0, 0, 2)
         with store.opened() as db:
             db.execute('UPDATE items SET image=?, image_w=?, image_h=?, img_state=? WHERE id=?', (*state, it['id']))
@@ -174,7 +187,11 @@ def sweep() -> int:
         used = {r['image'] for r in db.execute("SELECT image FROM items WHERE image != ''")}
     n = 0
     for p in img_dir().iterdir():
-        if NAME_RE.match(p.name) and p.name not in used and time.time() - p.stat().st_mtime > 3600:
+        stale = time.time() - p.stat().st_mtime > 3600
+        if stale and re.fullmatch(r'[0-9a-f]{40}\.part', p.name):   # 写到一半中断留下的临时文件
+            p.unlink(missing_ok=True)
+            continue
+        if NAME_RE.match(p.name) and p.name not in used and stale:
             p.unlink(missing_ok=True)
             n += 1
     return n

@@ -56,6 +56,9 @@ chmod 600 "$ENVF"
 echo "== 5. systemd 用户服务"
 mkdir -p "$UNIT_DIR"
 cp "$APP/deploy/news-radar.service" "$APP/deploy/news-radar-web.service" "$UNIT_DIR/"
+if ! loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q 'Linger=yes'; then
+  echo "注意：没开 linger，Mini PC 重启后要等你登录服务才会启动。开机自启请运行一次：sudo loginctl enable-linger $USER"
+fi
 systemctl --user daemon-reload
 systemctl --user enable news-radar.service news-radar-web.service >/dev/null
 systemctl --user restart news-radar.service news-radar-web.service

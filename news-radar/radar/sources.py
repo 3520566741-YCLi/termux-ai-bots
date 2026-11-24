@@ -42,7 +42,7 @@ class Source:
 
     def backoff(self) -> None:
         self.fails += 1
-        self.next_run = time.time() + min(1800, self.interval * (2 ** min(self.fails, 6)))
+        self.next_run = time.time() + min(300, self.interval * (2 ** min(self.fails, 6)))   # 最多等 5 分钟，断网恢复后很快接上
 
     def ok(self) -> None:
         self.fails = 0

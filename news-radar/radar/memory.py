@@ -121,6 +121,8 @@ def token_hash(token: str) -> str:
 def request_pair(db, name: str, thash: str) -> str:
     if not re.fullmatch(r'[0-9a-f]{64}', thash or ''):
         raise ValueError('令牌哈希不对')
+    # 没人批准的配对请求 10 分钟后自动作废，别人刷请求也堵不住真正的 Mac
+    db.execute('DELETE FROM devices WHERE approved=0 AND created < ?', (time.time() - 600,))
     pending = db.execute('SELECT COUNT(*) FROM devices WHERE approved=0').fetchone()[0]
     if pending >= 5:
         raise ValueError('待批准的设备太多了，先在手机上处理')

@@ -114,10 +114,41 @@ class WebTests(ServerBase):
         self.assertEqual((code, h['Location']), (303, '/'))
         self.assertIn('Set-Cookie', h)
         web._fails.extend([time.time()] * 10)
-        code, h = go(web.token())
-        self.assertEqual(h['Location'], '/?auth=locked')
+        code, h = go('123456')
+        self.assertEqual(h['Location'], '/?auth=locked')   # 登录码被锁
         self.assertNotIn('Set-Cookie', h)
+        code, h = go(web.token())
+        self.assertEqual(h['Location'], '/')               # 长口令不受锁定影响，别人乱试锁不住主人
         web._fails.clear()
+
+    def test_code_bruteforce_limits(self):
+        web._fails.clear()
+        code = web.new_code()
+        wrong = '%06d' % ((int(code) + 1) % 10 ** 6)
+        for _ in range(5):
+            self.assertEqual(web.check_login(wrong), 'bad')
+        self.assertEqual(web.check_login(code), 'bad')     # 错 5 次后这个码作废
+        web._fails.clear()
+        # 并发一大批：最多只有 10 次真正去试
+        tried = []
+        orig = web.use_code
+        web.use_code = lambda g: tried.append(g) or False
+        try:
+            ts = [threading.Thread(target=web.check_login, args=('%06d' % i,)) for i in range(60)]
+            [t.start() for t in ts]
+            [t.join() for t in ts]
+        finally:
+            web.use_code = orig
+        self.assertEqual(len(tried), 10)
+        web._fails.clear()
+
+    def test_negative_length(self):
+        import socket
+        host, port = self.srv.server_address
+        with socket.create_connection((host, port), timeout=5) as c:
+            c.sendall(b'POST /api/login HTTP/1.1\r\nHost: x\r\nX-Radar: 1\r\nContent-Type: application/json\r\n'
+                      b'Content-Length: -1\r\n\r\n')
+            self.assertIn(b'413', c.recv(200))
 
     def test_token_not_created_by_cli(self):
         import os
@@ -426,3 +457,27 @@ class DraftAndConfigTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class HardeningTests(unittest.TestCase):
+    def test_ssrf_blocks(self):
+        for host in ('127.0.0.1', '10.0.0.1', '100.100.1.1', '::ffff:100.64.0.1', '::ffff:127.0.0.1', '64:ff9b::a00:1',
+                     '169.254.169.254', '::1', '0.0.0.0'):
+            self.assertFalse(images._public(host), host)
+        self.assertTrue(images._public('8.8.8.8'))
+
+    def test_save_env_rejects_newline(self):
+        with self.assertRaises(ValueError):
+            config.save_env({'RADAR_NOTION_TITLE': 'a\nRADAR_DRY_RUN=1'})
+
+    def test_backup_keeps_seven(self):
+        d = config.DATA / 'backups'
+        d.mkdir(parents=True, exist_ok=True)
+        for i in range(9):
+            (d / f'radar-2020-01-0{i + 1}.db').write_bytes(b'x')
+        name = store.backup()
+        self.assertTrue(name.startswith('radar-'))
+        left = sorted(p.name for p in d.iterdir() if p.name.endswith('.db'))
+        self.assertEqual(len(left), 7)
+        self.assertIn(name, left)
+        self.assertEqual(oct(os.stat(d / name).st_mode & 0o777), '0o600')

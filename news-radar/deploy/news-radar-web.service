@@ -2,8 +2,7 @@
 [Unit]
 Description=Tidings web (phone PWA backend)
 After=network-online.target
-StartLimitIntervalSec=600
-StartLimitBurst=10
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

@@ -31,6 +31,9 @@ class Engine:
         self.sources: list = sources if sources is not None else build_sources(env)
         self.labels = {s.name: s.label for s in self.sources}
         self.wake = asyncio.Event()
+        self.running: dict = {}        # 正在抓的源 → task（每个源各抓各的，一个慢源不拖住别的）
+        self.last_fetch = time.time()  # 最近一次有源抓成功，心跳看它
+        self.llm_pause_until = 0.0     # DeepSeek 欠费/限流时暂停调用一阵，先用规则打分
 
     # ---------- 入库 ----------
     def ingest(self, items: list, baseline: bool = False) -> int:
@@ -56,15 +59,28 @@ class Engine:
                     db.execute('UPDATE items SET confirms = confirms + 1 WHERE id=?', (dup,))
                 else:
                     recent.insert(0, {'id': item_id, 'title': it['title'], 'fp': fp})
-        if new:
-            self.wake.set()
         return new
 
+    def llm_ok(self) -> bool:
+        return scorer.has_key(self.env) and time.time() >= self.llm_pause_until
+
+    def llm_failed(self, e: Exception) -> None:
+        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (401, 402, 429):
+            self.llm_pause_until = time.time() + 15 * 60
+            log.warning('llm_paused minutes=15 status=%s', e.response.status_code)
+
     async def fetch_once(self, src: Source) -> None:
+        try:
+            await self._fetch_once(src)
+        except Exception:   # 入库出错（比如数据库忙）也只影响这一轮，不会让整个程序退出
+            src.backoff()
+            log.exception('fetch_error source=%s', src.name)
+
+    async def _fetch_once(self, src: Source) -> None:
         with store.opened() as db:
             watch = store.watchlist(db)
         try:
-            items = await run_source(self.client, src, watch)
+            items = await asyncio.wait_for(run_source(self.client, src, watch), timeout=90)   # 总时长上限
         except Exception as e:   # 任何源出错都不影响别的源
             src.backoff()
             msg = scorer.describe_error(e)
@@ -73,8 +89,15 @@ class Engine:
             log.warning('source_error source=%s error=%s fails=%s', src.name, msg, src.fails)
             return
         src.ok()
-        new = self.ingest(items, baseline=not src.seen)
+        self.last_fetch = time.time()
+        # 只有这个源第一次跑（库里还没有它的消息）才把抓到的当积压不推；重启后停机期间的新消息照常推
+        if not src.seen:
+            with store.opened() as db:
+                src.seen = bool(db.execute('SELECT 1 FROM items WHERE source=? LIMIT 1', (src.name,)).fetchone())
+        new = await asyncio.to_thread(self.ingest, items, not src.seen)
         src.seen = True
+        if new:
+            self.wake.set()
         with store.opened() as db:
             store.source_result(db, src.name, count=new)
         if new:
@@ -82,12 +105,15 @@ class Engine:
 
     async def fetch_loop(self) -> None:
         while True:
-            now = time.time()
-            due = [s for s in self.sources if s.enabled and s.next_run <= now]
-            for s in due:
-                s.next_run = now + s.interval   # 防止上一轮没结束又被调度
-            if due:
-                await asyncio.gather(*(self.fetch_once(s) for s in due))
+            try:
+                now = time.time()
+                for s in self.sources:
+                    t = self.running.get(s.name)
+                    if s.enabled and s.next_run <= now and (t is None or t.done()):
+                        s.next_run = now + s.interval   # 防止上一轮没结束又被调度
+                        self.running[s.name] = asyncio.create_task(self.fetch_once(s))
+            except Exception:
+                log.exception('fetch_loop_error')
             await asyncio.sleep(2)
 
     # ---------- 打分 ----------
@@ -118,14 +144,16 @@ class Engine:
 
         async def one(batch: list) -> dict:
             nonlocal used
-            if not scorer.has_key(self.env) or used >= limit:
+            if not self.llm_ok() or used >= limit:
                 return scorer.finalize(batch, {})
             used += 1
             async with sem:
                 try:
-                    got, usage = await scorer.score_batch(self.client, self.env, batch, watch_names, events)
+                    got, usage = await asyncio.wait_for(
+                        scorer.score_batch(self.client, self.env, batch, watch_names, events), timeout=75)
                 except Exception as e:
                     log.warning('score_error error=%s', scorer.describe_error(e))
+                    self.llm_failed(e)
                     return scorer.finalize(batch, {})
             with store.opened() as db:
                 store.bump_usage(db, 'score', usage['in'], usage['out'])
@@ -191,7 +219,16 @@ class Engine:
             if not await self.passes_check(it, now):
                 continue
             it['source_label'] = self.labels.get(it['source'], it['source'])
-            await notify.push(self.client, self.env, it, list(settings['channels']))
+            ok = False
+            for attempt in range(3):   # 推送失败（网络抖动、ntfy 临时出错）重试，都失败才算没推
+                res = await notify.push(self.client, self.env, it, list(settings['channels']))
+                ok = not res or any(res.values())   # 试运行时 res 为空
+                if ok:
+                    break
+                await asyncio.sleep(5 * (attempt + 1))
+            if not ok:
+                log.warning('push_failed item=%s', it['id'])
+                continue
             last_hour += 1
             recent.append(it['title'])
             if it.get('event'):
@@ -234,7 +271,7 @@ class Engine:
 
     async def passes_check(self, it: dict, now: float) -> bool:
         """推送前用 DeepSeek 再查一次：旧闻翻炒不推；有可靠来源报道的取消传闻标记。出错时照推。"""
-        context = self.related(it, now)
+        context = await asyncio.to_thread(self.related, it, now)   # 要比对几千条标题，放到线程里不卡主循环
         late = now - it['published'] > FRESH_FOR_PUSH
         if late:
             it['late_minutes'] = int((now - it['published']) / 60)
@@ -245,12 +282,14 @@ class Engine:
         if reliable_dup or any(c['tier'] in ('A', 'B') and it.get('event') and c['event'] == it['event']
                                for c in context):
             it['rumor'] = 0
-        if not scorer.has_key(self.env):
+        if not self.llm_ok():
             return not late
         try:
-            res, usage = await scorer.verify(self.client, self.env, it, context, [d['title'] for d in dups])
+            res, usage = await asyncio.wait_for(   # 检查最多等 20 秒，DeepSeek 慢也不耽误推送
+                scorer.verify(self.client, self.env, it, context, [d['title'] for d in dups]), timeout=20)
         except Exception as e:
             log.warning('verify_error item=%s error=%s', it['id'], scorer.describe_error(e))
+            self.llm_failed(e)
             return not late   # 检查失败：新鲜的照推（宁可多推），迟到的不推
         if res.get('summary'):
             it['summary'] = res['summary']
@@ -292,6 +331,7 @@ class Engine:
 
     async def housekeeping(self) -> None:
         last_sweep = 0.0
+        last_backup = 0.0
         while True:
             try:
                 with store.opened() as db:
@@ -304,14 +344,23 @@ class Engine:
                     gone = await asyncio.to_thread(images.sweep)
                     if gone:
                         log.info('image_sweep files=%s', gone)
-                (config.DATA / 'heartbeat').write_text(str(int(time.time())))
+                if time.time() - last_backup > 3600:
+                    last_backup = time.time()
+                    name = await asyncio.to_thread(store.backup)
+                    if name:
+                        log.info('db_backup file=%s', name)
+                # 心跳：只有最近 10 分钟有源抓成功才写，抓取卡住时网页会显示“雷达未在运行”
+                if time.time() - self.last_fetch < 600:
+                    (config.DATA / 'heartbeat').write_text(str(int(time.time())))
+                else:
+                    log.warning('fetch_stalled seconds=%d', time.time() - self.last_fetch)
             except Exception:
                 log.exception('housekeeping_error')
             await asyncio.sleep(60)
 
     async def digest_loop(self) -> None:
         """到点出日报（北京时间，见 settings.digest_slots）。失败只记日志，下一分钟不会重试同一期以外的事。"""
-        tried: set = set()
+        tried: dict = {}   # 期 → 已试次数（失败 10 分钟后再试，最多 3 次）
         while True:
             await asyncio.sleep(60)
             try:
@@ -321,14 +370,35 @@ class Engine:
                     done = digest.done_slots_today(db)
                 slot = digest.due_slot(settings, now_bj, done)
                 key = f'{now_bj:%Y-%m-%d} {slot}'
-                if slot and key not in tried and scorer.has_key(self.env):
-                    tried.add(key)   # 每期只自动试一次，失败了可以在网页手动出
+                n, last = tried.get(key, (0, 0.0))
+                if slot and n < 3 and time.time() - last > 600 and self.llm_ok():
+                    tried[key] = (n + 1, time.time())
                     await asyncio.to_thread(digest.generate, self.env, slot)
+                    tried[key] = (3, time.time())   # 成功了就不再试
+                if len(tried) > 50:
+                    tried.clear()
             except llm.LLMError as e:
                 log.warning('digest_error error=%s', e)
             except Exception:
                 log.exception('digest_loop_error')
 
+    async def recover_unpushed(self) -> None:
+        """上次打完分还没来得及推就重启/崩溃的消息，启动时补推（还要满足新鲜度、去重、静音等全部条件）。"""
+        try:
+            now = time.time()
+            with store.opened() as db:
+                settings = store.get_settings(db)
+                rows = [dict(r) for r in db.execute(
+                    'SELECT * FROM items WHERE pushed IS NULL AND dup_of IS NULL AND baseline=0 AND score >= ? '
+                    'AND published > ? AND fetched > ? ORDER BY id DESC LIMIT 20',
+                    (int(settings['push_threshold']), now - FRESH_FOR_PUSH, now - FRESH_FOR_PUSH))]
+            if rows:
+                log.info('recover_unpushed candidates=%s', len(rows))
+                await self.maybe_push(rows, {r['id']: {} for r in rows})
+        except Exception:
+            log.exception('recover_error')
+
     async def run(self) -> None:
+        await self.recover_unpushed()
         await asyncio.gather(self.fetch_loop(), self.score_loop(), self.housekeeping(), self.digest_loop(),
                              self.image_loop())

@@ -3,6 +3,8 @@
 每次操作单独开连接（WAL 模式），抓取协程和网页线程可以同时读写。
 """
 import json
+import os
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -123,7 +125,28 @@ def opened(path: Optional[Path] = None):
         db.close()
 
 
+def backup(keep: int = 7) -> str:
+    """每天一份数据库备份（VACUUM INTO，运行中也是完整一致的副本），只保留最近 keep 份（只动 backups/ 里自己生成的文件）。"""
+    d = config.DATA / 'backups'
+    d.mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
+    target = d / f'radar-{bj_day()}.db'
+    if target.exists():
+        return ''
+    tmp = target.with_suffix('.part')
+    tmp.unlink(missing_ok=True)
+    with opened() as db:
+        db.execute('VACUUM INTO ?', (str(tmp),))
+    os.chmod(tmp, 0o600)
+    tmp.replace(target)
+    olds = sorted(p for p in d.iterdir() if re.fullmatch(r'radar-\d{4}-\d{2}-\d{2}\.db', p.name))
+    for p in olds[:-keep]:
+        p.unlink(missing_ok=True)
+    return target.name
+
+
 def init(path: Optional[Path] = None) -> None:
+    p = path or config.DB_PATH
     with opened(path) as db:
         db.executescript(SCHEMA)
         cols = {r[1] for r in db.execute('PRAGMA table_info(items)')}
@@ -138,6 +161,11 @@ def init(path: Optional[Path] = None) -> None:
                 db.execute('INSERT OR IGNORE INTO watch(name, kind, symbols, keywords, created) VALUES(?,?,?,?,?)',
                            (name, kind, json.dumps(symbols), json.dumps(keywords, ensure_ascii=False), now))
             db.execute('INSERT INTO settings VALUES("initialized", "1")')
+    for f in (p, p.with_name(p.name + '-wal'), p.with_name(p.name + '-shm')):   # 聊天和记忆在库里，只给自己读
+        try:
+            os.chmod(f, 0o600)
+        except OSError:
+            pass
 
 
 # ---------- 设置 ----------
@@ -210,15 +238,20 @@ def recent_items(db: sqlite3.Connection, limit: int = 80, min_score: int = 0, be
     return [dict(r) for r in db.execute(sql, args)]
 
 
+def bj_day(ts: float = None) -> str:
+    """北京时间的日期（DeepSeek 用量按北京时间算天，和日报、每日清理一致，不看机器时区）。"""
+    return time.strftime('%Y-%m-%d', time.gmtime((ts or time.time()) + 8 * 3600))
+
+
 def bump_usage(db: sqlite3.Connection, kind: str, tin: int = 0, tout: int = 0) -> None:
-    day = time.strftime('%Y-%m-%d')
+    day = bj_day()
     db.execute('INSERT INTO usage(day, kind, n, tin, tout) VALUES(?,?,1,?,?) '
                'ON CONFLICT(day, kind) DO UPDATE SET n=n+1, tin=tin+excluded.tin, tout=tout+excluded.tout',
                (day, kind, tin, tout))
 
 
 def usage_today(db: sqlite3.Connection) -> dict:
-    day = time.strftime('%Y-%m-%d')
+    day = bj_day()
     return {r['kind']: {'n': r['n'], 'in': r['tin'], 'out': r['tout']}
             for r in db.execute('SELECT * FROM usage WHERE day=?', (day,))}
 
