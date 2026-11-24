@@ -66,7 +66,7 @@ MIGRATIONS = {
 
 DEFAULT_SETTINGS = {
     'push_threshold': 4,        # 达到几分推送（1~5）
-    'push_unwatched_min': 5,    # 不在关注列表里的消息，至少几分才推
+    'push_unwatched_min': 4,    # 不在关注列表里的消息，至少几分才推（用户选了“非关注的重要异动也推”）
     'max_push_per_hour': 12,
     'mute_until': 0,
     'llm_daily_batches': 400,   # 每天最多调用 DeepSeek 打分多少批（每批最多 20 条），超出后只用关键词规则
