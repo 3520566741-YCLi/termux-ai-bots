@@ -1,0 +1,28 @@
+# 资讯雷达：抓取 + 打分 + ntfy 推送 + 定时日报（systemd 用户服务）
+# 代码在 ~/news-radar-app（feature/news-radar 分支的独立克隆），数据和配置放 ~/ai-council 下的 data/radar、runtime/radar、logs/radar。
+# 和 AI Council 的机器人完全分开：不共用进程、不共用 Python 环境、不改它们的文件。
+[Unit]
+Description=News Radar (stock & crypto alerts)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/news-radar-app/news-radar
+Environment=AI_COUNCIL_HOME=%h/ai-council
+Environment=PYTHONUNBUFFERED=1
+# 配置在 ~/ai-council/runtime/radar/.env（程序自己读，网页上改了也读得到）。首次安装是试运行 RADAR_DRY_RUN=1，确认没问题后删掉这行再重启
+ExecStart=%h/.local/share/news-radar/venv/bin/python -m radar run
+Restart=always
+RestartSec=15
+# 不抢别的程序的资源
+Nice=10
+CPUQuota=100%
+MemoryHigh=400M
+MemoryMax=700M
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

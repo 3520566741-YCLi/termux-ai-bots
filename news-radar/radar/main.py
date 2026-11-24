@@ -4,9 +4,13 @@
   python -m radar probe          每个源抓一次，打印条数和前 3 条标题（不入库、不推送），用来检查哪些源能用
   python -m radar test-push      发一条测试推送到所有渠道
   python -m radar ntfy-topic     显示 ntfy 订阅地址（手机 ntfy App 里订阅它）
+  python -m radar web            手机网页后端（默认 127.0.0.1:8790，由 tailscale serve 转成 HTTPS）
+  python -m radar web-url        显示手机网页的登录链接（带口令，别外传）
+  python -m radar demo           用假数据起一个本地网页（只用于前端调试；RADAR_DATA 必须是空目录）
 """
 import asyncio
 import logging
+import os
 import sys
 import time
 from logging.handlers import RotatingFileHandler
@@ -18,12 +22,28 @@ from .engine import Engine
 from .sources import build_sources, run_source
 
 
-def setup_logging() -> None:
+def web_url(tok: str) -> str:
+    """https://<MagicDNS 名>:8443/login?t=口令（tailscale serve 的地址）；取不到时给本机地址。"""
+    import json
+    import subprocess
+    port = os.environ.get('RADAR_WEB_PUBLIC_PORT', '8443')
+    try:
+        out = subprocess.run(['tailscale', 'status', '--json'], capture_output=True, text=True, timeout=10).stdout
+        name = (json.loads(out).get('Self') or {}).get('DNSName', '').rstrip('.')
+        if name:
+            return f'https://{name}:{port}/login?t={tok}'
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return f'http://127.0.0.1:{os.environ.get("RADAR_WEB_PORT", "8790")}/login?t={tok}'
+
+
+def setup_logging(name: str = 'app') -> None:
     config.LOGS.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
     log = logging.getLogger('radar')
     log.setLevel(logging.INFO)
-    for path, level in ((config.LOGS / 'app.log', logging.INFO), (config.LOGS / 'error.log', logging.WARNING)):
+    err = 'error.log' if name == 'app' else f'{name}-error.log'
+    for path, level in ((config.LOGS / f'{name}.log', logging.INFO), (config.LOGS / err, logging.WARNING)):
         h = RotatingFileHandler(path, maxBytes=5 * 1024 * 1024, backupCount=5, encoding='utf-8')
         h.setLevel(level)
         h.setFormatter(fmt)
@@ -74,13 +94,25 @@ async def run() -> int:
 
 def main(argv: list) -> int:
     cmd = argv[1] if len(argv) > 1 else 'run'
-    setup_logging() if cmd == 'run' else None
+    setup_logging('app') if cmd == 'run' else None
     if cmd == 'run':
         return asyncio.run(run())
     if cmd == 'probe':
         return asyncio.run(probe())
     if cmd == 'test-push':
         return asyncio.run(test_push())
+    if cmd == 'web':
+        setup_logging('web')
+        from . import web
+        web.serve()
+        return 0
+    if cmd == 'web-url':
+        from . import web
+        print(web_url(web.token()))
+        return 0
+    if cmd == 'demo':
+        from . import demo
+        return demo.main()
     if cmd == 'ntfy-topic':
         server, topic = notify.ntfy_target(config.settings())
         print(f'{server}/{topic}')

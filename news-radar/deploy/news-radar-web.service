@@ -1,0 +1,23 @@
+# 资讯雷达手机网页后端：只监听 127.0.0.1:8790，由 tailscale serve 转成 HTTPS（https://<本机 MagicDNS>:8443/）
+[Unit]
+Description=News Radar web (phone PWA backend)
+After=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/news-radar-app/news-radar
+Environment=AI_COUNCIL_HOME=%h/ai-council
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/.local/share/news-radar/venv/bin/python -m radar web
+Restart=always
+RestartSec=10
+Nice=10
+CPUQuota=50%
+MemoryHigh=200M
+MemoryMax=400M
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target
