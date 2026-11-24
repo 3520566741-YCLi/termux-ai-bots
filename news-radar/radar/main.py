@@ -59,7 +59,7 @@ async def test_push() -> int:
     it = {'id': 0, 'score': 4, 'title': '这是一条测试推送', 'summary': '资讯雷达测试：收到这条说明推送正常。',
           'source': 'test', 'source_label': '测试', 'tier': 'A', 'tickers': 'TEST', 'url': ''}
     async with httpx.AsyncClient() as client:
-        res = await notify.push(client, env, it, ['ntfy', 'telegram', 'webpush'])
+        res = await notify.push(client, env, it, ['ntfy', 'webpush'])
     print(res)
     return 0
 

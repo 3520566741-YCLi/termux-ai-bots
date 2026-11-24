@@ -1,4 +1,4 @@
-"""推送：ntfy（主力，iPhone 装 ntfy App 订阅主题）、Telegram（用主持机器人发到告警群）、网页推送（PWA）。
+"""推送：只用 ntfy（iPhone 装 ntfy App 订阅主题），外加可选的网页推送（PWA）。不做 Telegram 推送。
 
 - ntfy 主题第一次运行时随机生成（32 位），存在 data/radar/ntfy_topic（权限 600）。主题名等于密码，别外传；
   也可以在 runtime/radar/.env 里用 RADAR_NTFY_SERVER / RADAR_NTFY_TOPIC / RADAR_NTFY_TOKEN 换成自建或带密码的服务。
@@ -37,16 +37,6 @@ def ntfy_target(env: dict) -> tuple:
     return server, topic
 
 
-def telegram_chats(env: dict) -> list:
-    chats = [c.strip() for c in (env.get('RADAR_TELEGRAM_CHAT_IDS') or env.get('TELEGRAM_CHAT_IDS') or '').split(',')
-             if c.strip()]
-    if not chats:
-        ds = config.read_env(config.RUNTIME / 'deepseek' / '.env')
-        allowed = [int(c) for c in ds.get('ALLOWED_CHAT_IDS', '').split(',') if c.strip().lstrip('-').isdigit()]
-        chats = [str(c) for c in (sorted(c for c in allowed if c < 0)[:1] or sorted(allowed)[:1])]
-    return chats
-
-
 def format_alert(it: dict) -> tuple:
     stars = '🔴' if it['score'] >= 5 else '🟠'
     rumor = '【传闻】' if it.get('rumor') else ''
@@ -75,25 +65,6 @@ async def send_ntfy(client: httpx.AsyncClient, env: dict, it: dict, click: str) 
     headers = {'Authorization': 'Bearer ' + env['RADAR_NTFY_TOKEN']} if env.get('RADAR_NTFY_TOKEN') else {}
     r = await client.post(server, json=payload, headers=headers, timeout=15)
     return r.status_code == 200
-
-
-async def send_telegram(client: httpx.AsyncClient, env: dict, it: dict, click: str) -> bool:
-    token = env.get('TELEGRAM_BOT_TOKEN')
-    chats = telegram_chats(env)
-    if not token or not chats:
-        return False
-    title, message = format_alert(it)
-    text = f'{title}\n{message}' + (f'\n{click}' if click else '')
-    ok = True
-    for chat in chats:
-        try:
-            r = await client.post(f'https://api.telegram.org/bot{token}/sendMessage',
-                                  data={'chat_id': chat, 'text': text[:4000], 'disable_web_page_preview': 'true'},
-                                  timeout=15)
-            ok = ok and r.status_code == 200
-        except httpx.HTTPError:
-            ok = False
-    return ok
 
 
 # ---------- 网页推送 ----------
@@ -161,8 +132,6 @@ async def push(client: httpx.AsyncClient, env: dict, it: dict, channels: list) -
     jobs = []
     if 'ntfy' in channels:
         jobs.append(('ntfy', send_ntfy(client, env, it, click)))
-    if 'telegram' in channels:
-        jobs.append(('telegram', send_telegram(client, env, it, click)))
     if 'webpush' in channels:
         jobs.append(('webpush', send_webpush(it, click)))
     outcomes = await asyncio.gather(*(j for _, j in jobs), return_exceptions=True)

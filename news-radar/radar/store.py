@@ -70,8 +70,12 @@ DEFAULT_SETTINGS = {
     'max_push_per_hour': 12,
     'mute_until': 0,
     'llm_daily_batches': 400,   # 每天最多调用 DeepSeek 打分多少批（每批最多 20 条），超出后只用关键词规则
-    'channels': ['ntfy', 'telegram', 'webpush'],
+    'channels': ['ntfy', 'webpush'],   # 只有这两种推送渠道
+    'digest_enabled': True,     # 每天三期日报（北京时间，都在 DeepSeek 非高峰时段）
+    'digest_slots': ['07:30', '12:30', '21:00'],
 }
+
+CHANNELS = ('ntfy', 'webpush')
 
 # 第一次启动时的默认关注（可在网页里聊天修改）
 DEFAULT_WATCH = [
@@ -127,6 +131,7 @@ def get_settings(db: sqlite3.Connection) -> dict:
                 out[row['k']] = json.loads(row['v'])
             except ValueError:
                 pass
+    out['channels'] = [c for c in out['channels'] if c in CHANNELS]   # 旧数据库里的 telegram 等一律忽略
     return out
 
 

@@ -142,7 +142,7 @@ class EngineTests(unittest.TestCase):
     def test_pipeline(self):
         pushes, calls = [], []
         env = {'DEEPSEEK_API_KEY': 'k', 'DEEPSEEK_BASE_URL': 'https://api.deepseek.com', 'DEEPSEEK_MODEL': 'deepseek-chat',
-               'TELEGRAM_BOT_TOKEN': 't', 'TELEGRAM_CHAT_IDS': '-1', 'RADAR_NTFY_TOPIC': 'radar-test'}
+               'RADAR_NTFY_TOPIC': 'radar-test'}
         store.init()
         srcs = [s for s in sources.build_sources({}) if s.name in ('wallstcn', 'sina')]
 
@@ -150,7 +150,7 @@ class EngineTests(unittest.TestCase):
             async with httpx.AsyncClient(transport=fake_transport(pushes, calls)) as client:
                 eng = engine.Engine(env, client, srcs)
                 with store.opened() as db:
-                    store.set_setting(db, 'channels', ['ntfy', 'telegram'])
+                    store.set_setting(db, 'channels', ['ntfy', 'telegram'])   # 旧库里的 telegram 必须被忽略
 
                 async def cycle():
                     for s in srcs:
@@ -178,7 +178,8 @@ class EngineTests(unittest.TestCase):
         new = [r for r in rows if not r['baseline']]
         self.assertEqual(len(new), 4)
         self.assertEqual(sum(1 for r in new if r['pushed']), 1)
-        self.assertEqual(len(pushes), 2)                 # ntfy + telegram 各一次
+        self.assertEqual(len(pushes), 1)                 # 只推 ntfy
+        self.assertTrue(all('telegram' not in p for p in pushes))
         self.assertEqual(len(calls), 5)                  # 3 次打分 + 2 次推送前检查
         old = next(r for r in new if '跨河' in r['title'])
         self.assertEqual(old['reason'], '旧闻')
