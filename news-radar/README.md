@@ -13,11 +13,18 @@
 
 推送只用 ntfy（+ 可选的网页推送）。Telegram 只在两处出现：抓取公开频道（来源，只读），以及网页上**手动点“发送到群”**时用专用机器人发讨论文案（绝不自动发）。
 
+## 数据保留
+
+- 信息流只是缓存：没收藏的消息，北京时间过了当天就只剩**标题、来源、原网页链接**（正文、摘要、配图删掉），30 天后整条删掉；
+- 点「收藏」的完整图文永久留在网页的「收藏」里；真正要长期保存的再一键存进 Notion；
+- 配图缓存在 `data/radar/img/`（缩到宽 900，单张最多 4MB），没人用的图自动删掉。
+
 ## 代码
 
 - `radar/engine.py` 主循环；`sources.py` 来源；`scorer.py` 打分和推送前检查；`notify.py` 推送；`store.py` SQLite
 - `radar/digest.py` 日报（参考 Deck 的 Vesper 日报：一期一次 DeepSeek 调用，只能引用候选编号，附口播稿）
 - `radar/web.py` 网页后端；`assistant.py` 聊天（函数调用改关注/设置/查消息/存 Notion）；`draft.py` 讨论文案和发群；`notion.py` 存 Notion
+- `radar/images.py` 配图（RSS/Telegram 图或原文 og:image，防内网地址，缓存缩小）；`memory.py` Vesper 长期记忆中心（和 Mac 同步）
 - `radar/llm.py` 网页、日报、文案共用的 DeepSeek 调用，每次都按用途记账（usage 表）
 
 ## 安装（Mini PC，不需要 sudo）

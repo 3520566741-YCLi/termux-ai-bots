@@ -49,13 +49,22 @@ class Source:
         self.next_run = time.time() + self.interval
 
 
-def item(source: str, uid, title: str, body: str = '', url: str = '', published: Optional[float] = None) -> dict:
+IMG_SRC_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.I)
+
+
+def item(source: str, uid, title: str, body: str = '', url: str = '', published: Optional[float] = None,
+         image: str = '') -> dict:
+    image = safe_url((image or '').strip())[:1000]
+    if not image and body:   # 描述里的第一张图（在去掉 HTML 之前找）
+        m = IMG_SRC_RE.search(body)
+        image = safe_url(m.group(1).replace('&amp;', '&'))[:1000] if m else ''
     title = clean(title, 300)
     body = clean(body, 1500)
     if not title:
         title, body = body[:120], body
     return {'source': source, 'uid': str(uid)[:200], 'title': title, 'body': body if body != title else '',
-            'url': url if url.startswith(('http://', 'https://')) else '', 'published': published or time.time()}
+            'url': url if url.startswith(('http://', 'https://')) else '', 'published': published or time.time(),
+            'image_url': image}
 
 
 def safe_url(url: str) -> str:
@@ -69,8 +78,10 @@ def parse_wallstcn(text: str, url: str) -> list:
     for it in (data.get('data') or {}).get('items') or []:
         body = it.get('content_text') or clean(it.get('content') or '')
         title = it.get('title') or body
-        out.append(item('wallstcn', it.get('id'), title, body, safe_url(it.get('uri') or ''),
-                        float(it.get('display_time') or time.time())))
+        imgs = it.get('images') or it.get('image_uris') or []
+        img = imgs[0] if imgs and isinstance(imgs[0], str) else ((imgs[0] or {}).get('uri', '') if imgs and isinstance(imgs[0], dict) else '')
+        out.append(item('wallstcn', it.get('id'), title, it.get('content') or body, safe_url(it.get('uri') or ''),
+                        float(it.get('display_time') or time.time()), img))
     return out
 
 
@@ -130,9 +141,22 @@ def parse_feed(name: str) -> Callable:
                     if when:
                         break
             uid = (get['guid'].text if 'guid' in get else None) or (get['id'].text if 'id' in get else None) or link or title
+            image = ''
+            for c in node:   # media:content / media:thumbnail / enclosure 里的图片
+                ctag = c.tag.split('}')[-1]
+                if ctag in ('content', 'thumbnail', 'enclosure') and c.get('url') and (
+                        ctag == 'thumbnail' or (c.get('medium') == 'image') or (c.get('type') or '').startswith('image/')):
+                    image = c.get('url')
+                    break
+                if ctag == 'group':
+                    for g in c:
+                        if g.tag.split('}')[-1] in ('content', 'thumbnail') and g.get('url'):
+                            image = g.get('url')
+                            break
             if name.startswith('gnews'):
                 body = ''   # Google 新闻的描述只是标题链接，没用
-            out.append(item(name, uid, title, body, safe_url(link.strip()), when))
+                image = ''
+            out.append(item(name, uid, title, body, safe_url(link.strip()), when, image))
         return out
     return parse
 
@@ -142,12 +166,17 @@ TG_MSG_RE = re.compile(r'<div class="tgme_widget_message_wrap.*?data-post="([^"]
                        r'<time datetime="([^"]+)"', re.S)
 
 
+TG_PHOTO_RE = re.compile(r'tgme_widget_message_photo_wrap[^>]*background-image:url\([\'"]?(https://[^\'")]+)')
+
+
 def parse_telegram(text: str, url: str) -> list:
     out = []
-    for post, body, when in TG_MSG_RE.findall(text):
-        body = re.sub(r'<br\s*/?>', ' ', body)
-        ts = _rss_time(when)
-        out.append(item('tg', post, clean(body, 300), '', f'https://t.me/{post}', ts))
+    for block in text.split('tgme_widget_message_wrap')[1:]:
+        for post, body, when in TG_MSG_RE.findall('<div class="tgme_widget_message_wrap' + block):
+            body = re.sub(r'<br\s*/?>', ' ', body)
+            ts = _rss_time(when)
+            photo = TG_PHOTO_RE.search(block)
+            out.append(item('tg', post, clean(body, 300), '', f'https://t.me/{post}', ts, photo.group(1) if photo else ''))
     return out
 
 
