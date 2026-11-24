@@ -1,8 +1,8 @@
-# 资讯雷达：抓取 + 打分 + ntfy 推送 + 定时日报（systemd 用户服务）
+# Tidings：抓取 + 打分 + ntfy 推送 + 定时日报（systemd 用户服务）
 # 代码在 ~/news-radar-app（feature/news-radar 分支的独立克隆），数据和配置放 ~/ai-council 下的 data/radar、runtime/radar、logs/radar。
 # 和 AI Council 的机器人完全分开：不共用进程、不共用 Python 环境、不改它们的文件。
 [Unit]
-Description=News Radar (stock & crypto alerts)
+Description=Tidings (stock & crypto alerts)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=600

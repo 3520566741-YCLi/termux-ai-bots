@@ -185,7 +185,7 @@ def from_digest(d: dict) -> dict:
     if data.get('next'):
         body.append('## 接下来盯')
         body += [f'- {x}' for x in data['next']]
-    return {'title': '资讯雷达 · ' + d['title'], 'kind': '日报', 'ts': d['created'], 'source': '资讯雷达日报',
+    return {'title': 'Tidings · ' + d['title'], 'kind': '日报', 'ts': d['created'], 'source': 'Tidings 日报',
             'body': [b for b in body if b]}
 
 

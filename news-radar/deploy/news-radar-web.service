@@ -1,6 +1,6 @@
-# 资讯雷达手机网页后端：只监听 127.0.0.1:8790，由 tailscale serve 转成 HTTPS（https://<本机 MagicDNS>:8443/）
+# Tidings 手机网页后端：只监听 127.0.0.1:8790，由 tailscale serve 转成 HTTPS（https://<本机 MagicDNS>:8443/）
 [Unit]
-Description=News Radar web (phone PWA backend)
+Description=Tidings web (phone PWA backend)
 After=network-online.target
 StartLimitIntervalSec=600
 StartLimitBurst=10

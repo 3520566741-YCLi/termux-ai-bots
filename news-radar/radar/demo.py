@@ -68,7 +68,7 @@ def seed() -> None:
                         {'id': ids[7], 'title': '苹果或推迟新头显', 'text': '目前只是传闻，苹果未回应。'}],
                 'rumors': [{'id': ids[2], 'text': '特斯拉考虑在上海建储能工厂', 'check': '等特斯拉或上海官方公告'}],
                 'next': ['英伟达官方新闻稿和电话会', '下周美国 CPI 数据'],
-                'script': ['你好，这是这一期的资讯雷达。', '先说你最关心的英伟达：黄仁勋重返 CEO，盘后大涨约 9%。',
+                'script': ['你好，这是这一期的 Tidings。', '先说你最关心的英伟达：黄仁勋重返 CEO，盘后大涨约 9%。',
                            '加密市场这边，比特币跌破 9 万美元。', '传闻方面，特斯拉可能在上海建储能工厂，还没确认。', '就这些，祝你顺利。']}
         db.execute('INSERT INTO digests(day, slot, created, title, data, since, n_items) VALUES(?,?,?,?,?,?,?)',
                    (time.strftime('%Y-%m-%d'), '07:30', now - 3600, '11月24日 早报', json.dumps(data, ensure_ascii=False),

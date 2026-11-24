@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 在 Mini PC 上安装 / 更新资讯雷达（不需要 sudo，不碰 Docker、不碰 AI Council 的进程和文件）。
+# 在 Mini PC 上安装 / 更新 Tidings（不需要 sudo，不碰 Docker、不碰 AI Council 的进程和文件）。
 #   bash ~/news-radar-app/news-radar/deploy/install.sh          安装或更新，默认试运行（不推送）
 # 做的事：
 #   1. 备份 ~/ai-council/data/radar 和 runtime/radar 到 ~/ai-council/backups/news-radar-<时间>/

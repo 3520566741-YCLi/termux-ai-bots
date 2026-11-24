@@ -1,4 +1,4 @@
-"""资讯雷达入口。
+"""Tidings 入口。
 
   python -m radar run            常驻运行：抓取 + 打分 + 推送
   python -m radar probe          每个源抓一次，打印条数和前 3 条标题（不入库、不推送），用来检查哪些源能用
@@ -77,7 +77,7 @@ async def probe() -> int:
 async def test_push() -> int:
     env = config.settings()
     store.init()
-    it = {'id': 0, 'score': 4, 'title': '这是一条测试推送', 'summary': '资讯雷达测试：收到这条说明推送正常。',
+    it = {'id': 0, 'score': 4, 'title': '这是一条测试推送', 'summary': 'Tidings 测试：收到这条说明推送正常。',
           'source': 'test', 'source_label': '测试', 'tier': 'A', 'tickers': 'TEST', 'url': ''}
     async with httpx.AsyncClient() as client:
         res = await notify.push(client, env, it, ['ntfy', 'webpush'])

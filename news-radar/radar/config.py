@@ -1,4 +1,4 @@
-"""资讯雷达的路径和配置。
+"""Tidings 的路径和配置。
 
 和 AI Council 放在同一个目录（~/ai-council）下，但完全独立运行：
 - 自己的数据：data/radar/radar.db（SQLite）

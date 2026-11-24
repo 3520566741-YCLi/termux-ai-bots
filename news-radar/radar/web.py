@@ -1,4 +1,4 @@
-"""资讯雷达手机网页的后端（Python 标准库，不需要额外依赖）。接口见 news-radar/web/API.md。
+"""Tidings 手机网页的后端（Python 标准库，不需要额外依赖）。接口见 news-radar/web/API.md。
 
 - 默认只监听 127.0.0.1:8790，由 tailscale serve 转成 HTTPS（外网访问不到，只有同一 Tailscale 账号的设备能打开）；
 - 口令 Cookie 登录（口令存 data/radar/web_token，权限 600），连续输错 10 次锁 10 分钟；
@@ -449,7 +449,7 @@ def do_push_test(env: dict) -> dict:
     import httpx
 
     async def go():
-        it = {'id': 0, 'score': 4, 'title': '这是一条测试推送', 'summary': '资讯雷达测试：收到这条说明推送正常。',
+        it = {'id': 0, 'score': 4, 'title': '这是一条测试推送', 'summary': 'Tidings 测试：收到这条说明推送正常。',
               'source': 'test', 'source_label': '测试', 'tier': 'A', 'tickers': 'TEST', 'url': ''}
         with store.opened() as db:
             channels = store.get_settings(db)['channels']
