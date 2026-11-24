@@ -34,11 +34,13 @@ def add_item(db, uid, title, score=4, matched='英伟达', **kw):
     return item_id
 
 
-class WebTests(unittest.TestCase):
+class ServerBase(unittest.TestCase):
+    DB = 'web-test.db'
+
     @classmethod
     def setUpClass(cls):
         cls.old_db = config.DB_PATH
-        config.DB_PATH = Path(TMP) / 'web-test.db'   # 自己的库，不和其他测试的数据混
+        config.DB_PATH = Path(TMP) / cls.DB   # 自己的库，不和其他测试的数据混
         store.init()
         with store.opened() as db:
             cls.a = add_item(db, 'a', '英伟达宣布黄仁勋回归')
@@ -68,6 +70,9 @@ class WebTests(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read() or b'{}'), e.headers
 
+
+
+class WebTests(ServerBase):
     def test_auth(self):
         self.assertEqual(self.req('/api/status', cookie=False)[0], 401)
         code, body, headers = self.req('/api/login', {'token': web.token()}, cookie=False)
@@ -151,6 +156,58 @@ class WebTests(unittest.TestCase):
         self.assertEqual(len(self.req('/api/chat')[1]['messages']), 2)
         self.req('/api/settings', {'mute_minutes': 0})
         self.req('/api/watch/remove', {'name': '台积电'})
+
+
+class MemoryTests(ServerBase):
+    DB = 'mem-test.db'
+
+    def test_pair_and_sync(self):
+        import hashlib
+        tok = 'mac-secret-token'
+        h = hashlib.sha256(tok.encode()).hexdigest()
+        code, body, _ = self.req('/api/mem/pair', {'name': 'MacBook', 'token_hash': h}, cookie=False)
+        self.assertEqual(code, 200)
+        dev = body['device']
+        bearer = {'Authorization': 'Bearer ' + tok}
+        self.assertEqual(self.req('/api/mem/sync?since=0', cookie=False, headers=bearer)[0], 403)   # 还没批准
+        self.assertEqual(self.req('/api/mem/sync?since=0', cookie=False)[0], 401)
+        self.assertEqual(self.req('/api/devices/approve', {'id': dev})[0], 200)
+        # 手机上记一条
+        self.req('/api/memories/save', {'text': 'Mitchell 不碰港股'})
+        code, body, _ = self.req('/api/mem/sync?since=0', cookie=False, headers=bearer)
+        live = [m for m in body['items'] if not m['deleted']]   # 删除的也会同步（墓碑）
+        self.assertEqual([m['text'] for m in live], ['Mitchell 不碰港股'])
+        uid = live[0]['uid']
+        now = time.time()
+        # Mac 推来：一条新的、一条旧的修改（应被忽略）、一条新的删除
+        items = [{'uid': 'a' * 32, 'text': 'Mitchell 喜欢新拟态', 'created': now, 'updated': now},
+                 {'uid': uid, 'text': '旧版本', 'updated': now - 999},
+                 {'uid': 'b' * 32, 'text': 'x', 'updated': now, 'deleted': 1},
+                 {'uid': '../evil', 'text': 'x', 'updated': now}]
+        code, body, _ = self.req('/api/mem/sync', {'items': items}, cookie=False, headers=bearer)
+        self.assertEqual(body['applied'], 2)
+        mems = self.req('/api/memories')[1]['memories']
+        self.assertEqual(sorted(m['text'] for m in mems), ['Mitchell 不碰港股', 'Mitchell 喜欢新拟态'])
+        before = len(mems)
+        self.req('/api/mem/sync', {'items': [{'uid': uid, 'text': 'Mitchell 不碰港股', 'updated': time.time() + 1,
+                                               'deleted': 1}]}, cookie=False, headers=bearer)
+        self.assertEqual(len(self.req('/api/memories')[1]['memories']), before - 1)
+        self.assertEqual(self.req('/api/status')[1]['memory']['devices'], 1)
+        self.assertEqual(self.req('/api/devices/remove', {'id': dev})[0], 200)
+        self.assertEqual(self.req('/api/mem/sync?since=0', cookie=False, headers=bearer)[0], 401)
+
+    def test_assistant_memory_tools(self):
+        changes = []
+        r = assistant.run_tool({}, 'memory_save', {'text': 'Mitchell 关注 AI 芯片'}, changes)
+        mid = r['id']
+        assistant.run_tool({}, 'memory_update', {'id': mid, 'text': 'Mitchell 关注 AI 芯片和存储'}, changes)
+        with store.opened() as db:
+            self.assertIn('存储', from_prompt := __import__('radar.memory', fromlist=['x']).prompt_text(db))
+        self.assertIn(f'[{mid}]', from_prompt)
+        with self.assertRaises(ValueError):
+            assistant.run_tool({}, 'memory_delete', {'id': 'zz'}, changes)
+        assistant.run_tool({}, 'memory_delete', {'id': mid}, changes)
+        self.assertEqual(len(changes), 3)
 
 
 class DigestTests(unittest.TestCase):

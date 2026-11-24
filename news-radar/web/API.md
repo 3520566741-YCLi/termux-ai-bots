@@ -73,7 +73,8 @@
  "webpush": {"available": true, "public_key": "base64url"},
  "notion": {"configured": true, "title": "资讯雷达存档"},
  "tg": {"configured": false, "bot": "", "chat_title": ""},
- "today": {"items": 3456, "pushed": 3}}
+ "today": {"items": 3456, "pushed": 3},
+ "memory": {"count": 42, "devices": 1, "pending_devices": 0}}
 ```
 `POST /api/settings` 可以给：`push_threshold`(1~5)、`push_unwatched_min`(1~5)、`max_push_per_hour`(1~60)、
 `mute_minutes`(0=取消静音，最多 1440)、`digest_enabled`(bool)、`digest_slots`(["HH:MM", …] 最多 6 个)、`channels`(["ntfy","webpush"] 子集)。
@@ -98,6 +99,20 @@
 | GET | `/api/chat` | `{"messages": [{"role": "user|assistant", "text": "", "ts": 0}]}`（最近 60 条，正序） |
 | POST | `/api/chat` | `{"text": "帮我加上苹果，静音两小时"}` → `{"reply": "…", "changes": ["加入关注：苹果", "静音到 16:30"]}`（5~30 秒）。`changes` 非空时前端刷新状态 |
 | POST | `/api/chat/clear` | 清空聊天记录 |
+
+聊天助手就是 **Vesper**（和 Mac 上 Deck 里的 Vesper 同名同口吻），`changes` 里可能出现“记住了：…”“忘掉了：…”。
+
+### 记忆（Vesper 的长期记忆，手机和 Mac 共用）
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/memories` | `{"memories": [{"uid": "32位", "text": "Mitchell 不碰港股", "kind": "投资", "created": 0, "updated": 0, "origin": "phone|mac:xxxx"}], "devices": [{"id": "a1b2c3d4", "name": "YCLideMacBook-Pro", "approved": false, "created": 0, "last_seen": 0}]}` |
+| POST | `/api/memories/save` | `{"text": "…", "kind": "可选"}` → `{"memory": {...}}` |
+| POST | `/api/memories/update` | `{"uid": "…", "text": "…"}` |
+| POST | `/api/memories/delete` | `{"uid": "…"}` |
+| POST | `/api/devices/approve` | `{"id": "a1b2c3d4"}` 批准 Mac 的同步申请（`status.memory.pending_devices > 0` 时请在“我的”里醒目提示） |
+| POST | `/api/devices/remove` | `{"id": "…"}` 移除设备（撤销同步权限） |
+
+（`/api/mem/pair`、`/api/mem/sync` 是 Mac 同步小程序用的，令牌认证，前端不用管。）
 
 ### 讨论文案 / 发到 Telegram 群
 | 方法 | 路径 | 说明 |
@@ -133,4 +148,5 @@
   点开详情：摘要、原文、其他来源、按钮【讨论文案】【存到 Notion】【打开原文】。
 - 日报：最新一期 + 历史，按钮【朗读】【讨论文案】【存到 Notion】【现在出一期】。
 - 聊天：和 DeepSeek 对话改关注和设置，`changes` 用小标签显示。
-- 我的：关注列表、推送设置（门槛、静音）、ntfy 订阅地址、网页推送开关、Notion、Telegram 机器人、来源状态、今日用量。
+- 聊天：页面名可以直接叫 Vesper。
+- 我的：关注列表、推送设置（门槛、静音）、ntfy 订阅地址、网页推送开关、Vesper 的记忆（可删改）和记忆同步设备（批准/移除）、Notion、Telegram 机器人、来源状态、今日用量。

@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import assistant, config, digest, draft, llm, notify, notion, store
+from . import assistant, config, digest, draft, llm, memory, notify, notion, store
 from .sources import build_sources
 
 log = logging.getLogger('radar')
@@ -161,6 +161,9 @@ def status(env: dict) -> dict:
         settings = store.get_settings(db)
         watch = store.watchlist(db)
         day0 = time.mktime(time.localtime(now)[:3] + (0, 0, 0, 0, 0, -1))
+        mem = {'count': db.execute('SELECT COUNT(*) FROM memories WHERE deleted=0').fetchone()[0],
+               'pending_devices': db.execute('SELECT COUNT(*) FROM devices WHERE approved=0').fetchone()[0],
+               'devices': db.execute('SELECT COUNT(*) FROM devices WHERE approved=1').fetchone()[0]}
         today = {'items': db.execute('SELECT COUNT(*) FROM items WHERE fetched > ?', (day0,)).fetchone()[0],
                  'pushed': db.execute('SELECT COUNT(*) FROM items WHERE pushed > ?', (day0,)).fetchone()[0]}
     tin = sum(u['in'] for u in usage.values())
@@ -182,7 +185,7 @@ def status(env: dict) -> dict:
         'notion': {'configured': notion.configured(env), 'title': env.get('RADAR_NOTION_TITLE', '')},
         'tg': {'configured': draft.tg_configured(env), 'bot': env.get('RADAR_DRAFT_TG_BOT', ''),
                'chat_title': env.get('RADAR_DRAFT_TG_CHAT_TITLE', '')},
-        'today': today,
+        'today': today, 'memory': mem,
     }
 
 
@@ -390,6 +393,32 @@ def handle_post(path: str, body: dict) -> dict:
             raise ApiError('群 ID 不对')
         config.save_env({'RADAR_DRAFT_TG_CHAT': chat_id, 'RADAR_DRAFT_TG_CHAT_TITLE': _str(body.get('title'), 60).replace('\n', ' ')})
         return {'ok': True}
+    if path == '/api/memories/save':
+        with store.opened() as db:
+            try:
+                return {'memory': memory.save(db, _str(body.get('text'), 300), _str(body.get('kind'), 20))}
+            except ValueError as e:
+                raise ApiError(str(e))
+    if path in ('/api/memories/update', '/api/memories/delete'):
+        with store.opened() as db:
+            try:
+                if path.endswith('update'):
+                    memory.update(db, _str(body.get('uid'), 32), _str(body.get('text'), 300))
+                else:
+                    memory.delete(db, _str(body.get('uid'), 32))
+            except ValueError as e:
+                raise ApiError(str(e), 404)
+        return {'ok': True}
+    if path in ('/api/devices/approve', '/api/devices/remove'):
+        dev = _str(body.get('id'), 16)
+        with store.opened() as db:
+            if path.endswith('approve'):
+                n = db.execute('UPDATE devices SET approved=1 WHERE id=?', (dev,)).rowcount
+            else:
+                n = db.execute('DELETE FROM devices WHERE id=?', (dev,)).rowcount
+        if not n:
+            raise ApiError('找不到这台设备', 404)
+        return {'ok': True}
     if path == '/api/config/clear':
         what = body.get('what')
         if what == 'notion':
@@ -426,7 +455,51 @@ def handle_get(path: str, q: dict) -> dict:
         return {'messages': assistant.history()}
     if path == '/api/config/tg/groups':
         return do_tg_groups(env)
+    if path == '/api/memories':
+        with store.opened() as db:
+            return {'memories': memory.active(db), 'devices': memory.devices(db)}
     raise ApiError('没有这个接口', 404)
+
+
+# ---------- 记忆同步（Mac 上的同步小程序用，令牌认证，不用 Cookie） ----------
+def sync_device(headers):
+    auth = headers.get('Authorization', '')
+    tok = auth[7:].strip() if auth.startswith('Bearer ') else ''
+    with store.opened() as db:
+        dev = memory.device_for(db, tok)
+    if not dev:
+        raise ApiError('设备没配对', 401)
+    if not dev['approved']:
+        raise ApiError('等待在手机上批准', 403)
+    return dev
+
+
+def mem_get(headers, q: dict) -> dict:
+    sync_device(headers)
+    try:
+        since = float((q.get('since') or ['0'])[0] or 0)
+    except ValueError:
+        raise ApiError('since 不对')
+    with store.opened() as db:
+        return {'now': time.time(), 'items': memory.changes(db, since)}
+
+
+def mem_post(path: str, headers, body: dict) -> dict:
+    if path == '/api/mem/pair':
+        with store.opened() as db:
+            try:
+                dev = memory.request_pair(db, _str(body.get('name'), 40), _str(body.get('token_hash'), 64))
+            except ValueError as e:
+                raise ApiError(str(e), 429)
+        log.info('mem_pair_request device=%s', dev)
+        return {'device': dev, 'note': '请在手机网页“我的 → 记忆同步”里点允许'}
+    dev = sync_device(headers)
+    items = body.get('items') or []
+    if not isinstance(items, list):
+        raise ApiError('items 不对')
+    with store.opened() as db:
+        n = memory.apply(db, items, 'mac:' + dev['id'])
+    return {'applied': n, 'now': time.time()}
 
 
 # ---------- HTTP ----------
@@ -502,6 +575,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(303, b'', 'text/plain', {'Location': '/', 'Set-Cookie': self.cookie_header()})
                 note_fail()
                 return self.send(403, '口令不对，或输错太多次（10 分钟后再试）。'.encode(), 'text/plain; charset=utf-8')
+            if url.path == '/api/mem/sync':
+                return self.json(200, mem_get(self.headers, parse_qs(url.query)))
             if url.path.startswith('/api/'):
                 if not self.authed():
                     return self.json(401, {'error': '请先登录'})
@@ -534,6 +609,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json(200, {'ok': True}, {'Set-Cookie': self.cookie_header()})
                 note_fail()
                 return self.json(403, {'error': '口令不对'})
+            if url.path in ('/api/mem/pair', '/api/mem/sync'):
+                return self.json(200, mem_post(url.path, self.headers, body))
             if not self.authed():
                 return self.json(401, {'error': '请先登录'})
             return self.json(200, handle_post(url.path, body))
