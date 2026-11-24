@@ -80,7 +80,7 @@ def seed() -> None:
 
 def fake_chat(env, messages, kind, **kw):
     time.sleep(1.2)
-    last = messages[-1]['content'] if messages else ''
+    last = next((m['content'] for m in reversed(messages) if m['role'] == 'user'), '')
     if kind == 'draft':
         return {'content': '【演示文案】英伟达：黄仁勋重返 CEO 🚀\n\n• 即日生效，盘后大涨约 9%\n• 多家主流媒体确认\n\n大家觉得这波能持续吗？\n来源：https://example.com/news/0\n仅供讨论，不构成投资建议'}
     if kind == 'digest':
