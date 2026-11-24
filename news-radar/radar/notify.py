@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 from pathlib import Path
 
@@ -37,34 +38,104 @@ def ntfy_target(env: dict) -> tuple:
     return server, topic
 
 
+_web_base = None
+
+
+def web_base(env: dict) -> str:
+    """Tidings 网页地址（https://<MagicDNS>:8443），给推送的“点开看详情”用；取不到时返回空串。"""
+    global _web_base
+    if env.get('RADAR_WEB_PUBLIC_URL'):
+        return env['RADAR_WEB_PUBLIC_URL'].rstrip('/')
+    if _web_base is None:
+        import subprocess
+        _web_base = ''
+        try:
+            out = subprocess.run(['tailscale', 'status', '--json'], capture_output=True, text=True, timeout=10).stdout
+            name = (json.loads(out).get('Self') or {}).get('DNSName', '').rstrip('.')
+            if name:
+                _web_base = f'https://{name}:{os.environ.get("RADAR_WEB_PUBLIC_PORT", "8443")}'
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    return _web_base
+
+
+def _cut(text: str, n: int) -> str:
+    text = ' '.join((text or '').split())
+    return text if len(text) <= n else text[:n - 1] + '…'
+
+
+def headline(it: dict) -> str:
+    """推送标题用的一句话结论：优先用推送前检查写的 headline；没有时从摘要/标题截第一句。"""
+    h = (it.get('headline') or '').strip()
+    if h:
+        return _cut(h, 24)
+    text = (it.get('summary') or it['title']).strip()
+    text = re.sub(r'^【[^】]{1,30}】', '', text) or text
+    first = re.split(r'[，。；;,!！?？]', text, maxsplit=1)[0]
+    return _cut(first or text, 24)
+
+
 def format_alert(it: dict) -> tuple:
-    stars = '🔴' if it['score'] >= 5 else '🟠'
-    rumor = '【传闻】' if it.get('rumor') else ''
-    head = it.get('summary') or it['title']
-    title = f'{stars}{rumor}{it.get("tickers") or it.get("matched") or "市场"} · {it["score"]}分'
-    lines = [head]
-    if it.get('summary') and it['title'] not in it['summary']:
-        lines.append('原文：' + it['title'][:200])
-    lines.append(f'来源：{it.get("source_label") or it["source"]}（可信度 {it.get("tier", "B")}）')
+    """短格式：标题一行（标的 + 一句话结论），正文最多一行关键信息 + 一行来源；详情点开推送看。"""
+    icon = '🔴' if it['score'] >= 5 else '🟠'
+    rumor = '传闻｜' if it.get('rumor') else ''
+    title = f'{icon} {rumor}{headline(it)}'
+    lines = []
+    key = (it.get('keypoint') or '').strip()
+    if key:
+        lines.append(_cut(key, 40))
+    meta = []
+    tick = (it.get('tickers') or '').split(',')[0].strip()
+    if tick:
+        meta.append(tick)
+    meta.append(f'{it.get("source_label") or it["source"]} {it.get("tier", "B")}')
+    if it.get('rumor'):
+        meta.append('未证实')
+    elif it.get('confirms'):
+        meta.append(f'{int(it["confirms"]) + 1} 个来源')
+    elif it.get('tier') != 'A':
+        meta.append('单一来源')
     if it.get('late_minutes'):
-        lines.append(f'⏱ 这条消息发布于 {it["late_minutes"]} 分钟前，来源晚到')
-    if it.get('confirms'):
-        lines.append(f'另有 {it["confirms"]} 个来源报道')
-    elif it.get('tier') != 'A' and not it.get('rumor'):
-        lines.append('目前只有这一个来源，待确认')
-    return title[:120], '\n'.join(lines)[:1500]
+        meta.append(f'{it["late_minutes"]} 分钟前发布')
+    lines.append(' · '.join(meta))
+    return title[:80], '\n'.join(lines)[:300]
+
+
+def item_link(env: dict, it: dict) -> str:
+    """点推送打开 Tidings 里这条的详情；网页地址取不到时退回原网页。"""
+    base = web_base(env)
+    if base and it.get('id'):
+        return f'{base}/?item={int(it["id"])}'
+    return it.get('url') or ''
 
 
 async def send_ntfy(client: httpx.AsyncClient, env: dict, it: dict, click: str) -> bool:
     server, topic = ntfy_target(env)
     title, message = format_alert(it)
     payload = {'topic': topic, 'title': title, 'message': message,
-               'priority': 5 if it['score'] >= 5 else 4, 'tags': ['chart_with_upwards_trend']}
-    if click:
-        payload['click'] = click
+               'priority': 5 if it['score'] >= 5 else 4}
+    link = item_link(env, it)
+    if link:
+        payload['click'] = link
+    if it.get('url') and it['url'] != link:
+        payload['actions'] = [{'action': 'view', 'label': '原文', 'url': it['url'], 'clear': True}]
     headers = {'Authorization': 'Bearer ' + env['RADAR_NTFY_TOKEN']} if env.get('RADAR_NTFY_TOKEN') else {}
     r = await client.post(server, json=payload, headers=headers, timeout=15)
     return r.status_code == 200
+
+
+def preview_item() -> dict:
+    """测试推送：拿最近一条真推过的消息，用现在的格式再发一次（标明是预览）；没有时发一条说明。"""
+    with store.opened() as db:
+        r = db.execute('SELECT * FROM items WHERE pushed IS NOT NULL AND trimmed=0 ORDER BY pushed DESC LIMIT 1').fetchone()
+    if r:
+        it = dict(r)
+        it['headline'] = '[预览] ' + headline(it)
+        it['source_label'] = it['source']
+        return it
+    return {'id': 0, 'score': 4, 'title': 'Tidings 测试推送', 'headline': 'Tidings 测试：推送正常',
+            'keypoint': '重要消息会这样提醒你，点开看详情', 'source': 'Tidings', 'source_label': 'Tidings',
+            'tier': 'A', 'tickers': '', 'url': ''}
 
 
 # ---------- 网页推送 ----------
@@ -115,7 +186,8 @@ async def send_webpush(it: dict, click: str) -> bool:
     if not subs:
         return False
     title, message = format_alert(it)
-    payload = json.dumps({'title': title, 'body': message, 'url': click or '/'}, ensure_ascii=False)
+    payload = json.dumps({'title': title, 'body': message,
+                          'url': f'/?item={int(it["id"])}' if it.get('id') else '/'}, ensure_ascii=False)
     sent, gone = await asyncio.to_thread(_webpush_all, subs, payload, pem)
     if gone:
         with store.opened() as db:

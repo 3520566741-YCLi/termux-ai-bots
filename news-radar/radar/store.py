@@ -81,11 +81,13 @@ MIGRATIONS = {
     'image_w': 'image_w INTEGER NOT NULL DEFAULT 0',
     'image_h': 'image_h INTEGER NOT NULL DEFAULT 0',
     'trimmed': 'trimmed INTEGER NOT NULL DEFAULT 0',     # 1 = 每日清理后只剩标题、来源和原网页链接
+    'headline': "headline TEXT NOT NULL DEFAULT ''",     # 推送标题（一句话结论，推送前检查写）
+    'keypoint': "keypoint TEXT NOT NULL DEFAULT ''",     # 推送正文的一行关键信息
 }
 
 DEFAULT_SETTINGS = {
     'push_threshold': 4,        # 达到几分推送（1~5）
-    'push_unwatched_min': 4,    # 不在关注列表里的消息，至少几分才推（用户选了“非关注的重要异动也推”）
+    'push_unwatched_min': 5,    # 不在关注列表里的消息，只推 5 分的大异动（11-24 用户要推送更少更准）
     'max_push_per_hour': 12,
     'mute_until': 0,
     'llm_daily_batches': 400,   # 每天最多调用 DeepSeek 打分多少批（每批最多 20 条），超出后只用关键词规则

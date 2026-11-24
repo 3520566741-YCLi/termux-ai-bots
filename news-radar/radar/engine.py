@@ -293,14 +293,19 @@ class Engine:
             return not late   # 检查失败：新鲜的照推（宁可多推），迟到的不推
         if res.get('summary'):
             it['summary'] = res['summary']
+        it['headline'], it['keypoint'] = res.get('headline', ''), res.get('keypoint', '')
         with store.opened() as db:
             store.bump_usage(db, 'verify', usage['in'], usage['out'])
             if res['confirmed']:
                 it['rumor'] = 0
-            db.execute('UPDATE items SET rumor=?, reason=?, summary=? WHERE id=?',
-                       (it['rumor'], res['why'], it.get('summary') or '', it['id']))
+            db.execute('UPDATE items SET rumor=?, reason=?, summary=?, headline=?, keypoint=? WHERE id=?',
+                       (it['rumor'], res['why'], it.get('summary') or '', it['headline'], it['keypoint'], it['id']))
         if not res['new']:
             log.info('push_skipped reason=old_news item=%s', it['id'])
+            return False
+        if not res.get('major', True) and it['score'] < 5:
+            # 只推“现在就该知道”的：例行公告、常规回购这类不推（网页信息流里照样有）
+            log.info('push_skipped reason=minor item=%s', it['id'])
             return False
         return True
 

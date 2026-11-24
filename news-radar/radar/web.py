@@ -476,8 +476,7 @@ def do_push_test(env: dict) -> dict:
     import httpx
 
     async def go():
-        it = {'id': 0, 'score': 4, 'title': '这是一条测试推送', 'summary': 'Tidings 测试：收到这条说明推送正常。',
-              'source': 'test', 'source_label': '测试', 'tier': 'A', 'tickers': 'TEST', 'url': ''}
+        it = notify.preview_item()
         with store.opened() as db:
             channels = store.get_settings(db)['channels']
         async with httpx.AsyncClient() as client:

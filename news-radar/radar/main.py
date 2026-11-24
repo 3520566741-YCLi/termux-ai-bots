@@ -77,8 +77,7 @@ async def probe() -> int:
 async def test_push() -> int:
     env = config.settings()
     store.init()
-    it = {'id': 0, 'score': 4, 'title': '这是一条测试推送', 'summary': 'Tidings 测试：收到这条说明推送正常。',
-          'source': 'test', 'source_label': '测试', 'tier': 'A', 'tickers': 'TEST', 'url': ''}
+    it = notify.preview_item()
     async with httpx.AsyncClient() as client:
         res = await notify.push(client, env, it, ['ntfy', 'webpush'])
     print(res)

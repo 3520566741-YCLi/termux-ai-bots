@@ -481,3 +481,20 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(len(left), 7)
         self.assertIn(name, left)
         self.assertEqual(oct(os.stat(d / name).st_mode & 0o777), '0o600')
+
+
+class PushFormatTests(unittest.TestCase):
+    def test_short_format(self):
+        from radar import notify
+        it = {'id': 7, 'score': 4, 'title': '【华友钴业：拟斥10亿元-15亿元回购股份】华友钴业公告称，公司拟以自有资金……' * 3,
+              'summary': '华友钴业公告拟以10亿至15亿元回购股份，价格不超45元/股', 'source': 'sina',
+              'source_label': '新浪财经', 'tier': 'B', 'tickers': '603799', 'url': 'https://e.com/a',
+              'headline': '华友钴业拟回购10-15亿元', 'keypoint': '占总股本约1.5%'}
+        title, msg = notify.format_alert(it)
+        self.assertEqual(title, '🟠 华友钴业拟回购10-15亿元')
+        self.assertNotIn('原文', msg)
+        self.assertLessEqual(len(msg.splitlines()), 2)
+        self.assertIn('603799', msg)
+        it.pop('headline')
+        self.assertLessEqual(len(notify.format_alert(it)[0]), 30)
+        self.assertEqual(notify.item_link({'RADAR_WEB_PUBLIC_URL': 'https://h:8443'}, it), 'https://h:8443/?item=7')
