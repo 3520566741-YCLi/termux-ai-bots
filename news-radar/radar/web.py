@@ -154,6 +154,7 @@ def feed(q: dict) -> dict:
     try:
         min_score = max(0, min(5, int(arg('min', '0') or 0)))
         before = int(arg('before', '0') or 0) or None
+        after = int(arg('after', '0') or 0) or None
         limit = max(1, min(100, int(arg('limit', '50') or 50)))
     except ValueError:
         raise ApiError('参数不对')
@@ -164,6 +165,9 @@ def feed(q: dict) -> dict:
     if before:
         sql += ' AND id < ?'
         args.append(before)
+    if after:   # 只要比 after 新的（实时刷新时补新条目）
+        sql += ' AND id > ?'
+        args.append(after)
     if market:
         sql += ' AND market = ?'
         args.append(market)
@@ -183,6 +187,27 @@ def feed(q: dict) -> dict:
         rows = rows[:limit]
         links = store.saved_refs(db, 'notion', 'item', [r['id'] for r in rows])
     return {'items': [item_out(r, links) for r in rows], 'next_before': rows[-1]['id'] if more and rows else None}
+
+
+PULSE_WINDOW = 300   # 只看最近 300 条的打分/推送/配图变化（走主键范围，很便宜）
+
+
+def pulse() -> dict:
+    """实时刷新用的“有没有变化”：前端可见时每几秒问一次，没变化就 304，不用拉整页。
+    每块一个短版本号，哪块变了前端就只刷哪块。"""
+    with store.opened() as db:
+        top = db.execute('SELECT COALESCE(MAX(id), 0) FROM items').fetchone()[0]
+        r = db.execute('SELECT COUNT(score), COUNT(pushed), COUNT(image), COUNT(saved), COALESCE(SUM(trimmed), 0) '
+                       'FROM items WHERE id > ?', (top - PULSE_WINDOW,)).fetchone()
+        saved_n = db.execute('SELECT COUNT(*), COALESCE(MAX(saved), 0) FROM items WHERE saved IS NOT NULL').fetchone()
+        dig = db.execute('SELECT COALESCE(MAX(id), 0) FROM digests').fetchone()[0]
+        chat = db.execute('SELECT COALESCE(MAX(id), 0) FROM chat').fetchone()[0]
+    feed_v = '%d.%d.%d.%d.%d.%d' % (top, r[0], r[1], r[2], r[3], r[4])
+    return {'feed': feed_v, 'top': top, 'saved': '%d.%d' % (saved_n[0], int(saved_n[1])), 'digest': dig, 'chat': chat}
+
+
+def pulse_etag(p: dict) -> str:
+    return '"' + hashlib.sha1(json.dumps(p, sort_keys=True).encode()).hexdigest()[:16] + '"'
 
 
 def saved_list(q: dict) -> dict:
@@ -694,6 +719,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(303, b'', 'text/plain', {'Location': '/?auth=bad'})
             if url.path == '/api/mem/sync':
                 return self.json(200, mem_get(self.headers, parse_qs(url.query)))
+            if url.path == '/api/pulse':
+                if not self.authed():
+                    return self.json(401, {'error': '请先登录'})
+                p = pulse()
+                tag = pulse_etag(p)
+                if self.headers.get('If-None-Match') == tag:
+                    return self.send(304, b'', 'application/json', {'ETag': tag})
+                return self.json(200, p, {'ETag': tag})
             if url.path.startswith('/img/'):
                 return self.image(url.path[5:])
             if url.path.startswith('/api/'):

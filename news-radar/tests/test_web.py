@@ -133,6 +133,24 @@ class WebTests(ServerBase):
             else:
                 os.environ['RADAR_WEB_TOKEN_FILE'] = old
 
+    def test_pulse_and_after(self):
+        code, p, h = self.req('/api/pulse')
+        self.assertEqual(code, 200)
+        tag = h['ETag']
+        r = urllib.request.Request(self.base + '/api/pulse', headers={'Cookie': self.cookie, 'If-None-Match': tag})
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(r)
+        self.assertEqual(e.exception.code, 304)
+        with store.opened() as db:
+            new = add_item(db, 'pulse1', '新消息来了')
+        code, p2, h2 = self.req('/api/pulse')
+        self.assertNotEqual(h2['ETag'], tag)
+        self.assertNotEqual(p2['feed'], p['feed'])
+        self.assertEqual(p2['top'], new)
+        _, f, _ = self.req('/api/feed?after=%d' % p['top'])
+        self.assertEqual([i['id'] for i in f['items']], [new])
+        self.assertEqual(self.req('/api/pulse', cookie=False)[0], 401)
+
     def test_csrf(self):
         r = urllib.request.Request(self.base + '/api/settings', data=b'{"push_threshold":1}',
                                    headers={'Cookie': self.cookie, 'Content-Type': 'application/json'})
