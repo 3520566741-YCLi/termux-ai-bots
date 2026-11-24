@@ -277,16 +277,30 @@
     const url = (st.ntfy && st.ntfy.subscribe_url) || '';
     const safe = R.safeUrl(url);
     if (!url) return [el('h2.section-h', 'ntfy 推送'), el('div.list', el('div.row', el('span.grow.muted', '后端没有配置 ntfy')))];
+    // ntfy App 的“＋”里要填的是主题名，不是整段网址；服务器是默认的 ntfy.sh 时不用改
+    const m = url.match(/^(https?:\/\/[^/]+)\/([^/?#]+)/);
+    const server = m ? m[1] : '';
+    const topic = m ? decodeURIComponent(m[2]) : url;
+    const host = server.replace(/^https?:\/\//, '');
+    const isDefault = host === 'ntfy.sh';
+    const copyBtn = (text, label) => el('button.icon-btn.plain.press', { type: 'button', 'aria-label': label,
+      onclick: async () => { const ok = await R.copy(text); R.toast(ok ? '已复制' : '复制失败，请长按手动复制', ok ? 'ok' : 'err'); } }, R.icon('copy', 'sm'));
     return [
       el('h2.section-h', 'ntfy 推送'),
       el('div.list',
         el('div.row.has-icon.st-url-row',
-          rowIcon('link', 'var(--red)'),
-          el('div.grow', el('div.sub', '订阅地址'), el('div.st-mono', url)),
-          el('button.icon-btn.plain.press', { type: 'button', 'aria-label': '复制订阅地址', onclick: async () => { const ok = await R.copy(url); R.toast(ok ? '已复制' : '复制失败，请长按地址手动复制', ok ? 'ok' : 'err'); } }, R.icon('copy', 'sm'))),
+          rowIcon('bell', 'var(--red)'),
+          el('div.grow', el('div.sub', '主题名（订阅时只填这个）'), el('div.st-mono', topic)),
+          copyBtn(topic, '复制主题名')),
+        el('div.row.has-icon.st-url-row',
+          rowIcon('link', 'var(--gray, #8e8e93)'),
+          el('div.grow', el('div.sub', isDefault ? '服务器（App 默认就是它，不用改）' : '服务器'), el('div.st-mono', host || '-')),
+          isDefault ? null : copyBtn(server, '复制服务器地址')),
         safe ? el('button.row.has-icon.press-row', { type: 'button', onclick: () => R.openUrl(safe) },
-          rowIcon('up', 'var(--blue)'), el('span.grow.label.st-tint', '打开 ntfy'), chev()) : null),
-      el('p.section-f', '在手机装 ntfy App，点“＋”订阅，把上面的地址粘贴进去，就能收到推送。没装 App 时，点“打开 ntfy”也能在浏览器里看。'),
+          rowIcon('up', 'var(--blue)'), el('span.grow.label.st-tint', '在浏览器里看推送'), chev()) : null),
+      el('p.section-f', isDefault
+        ? '① App Store 装 ntfy；② 打开后点右上角“＋”；③ Topic 一栏粘贴上面的主题名（不是整段网址），服务器保持默认，点 Subscribe；④ 回来点“测试推送”。'
+        : '① App Store 装 ntfy；② 点“＋”，Topic 粘贴主题名；③ 打开“Use another server”，填上面的服务器地址，点 Subscribe；④ 回来点“测试推送”。'),
     ];
   }
 
