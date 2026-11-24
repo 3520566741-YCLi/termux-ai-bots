@@ -12,7 +12,9 @@ import time
 
 import httpx
 
-from . import config, notify, scorer, store
+from datetime import datetime
+
+from . import config, digest, llm, notify, scorer, store
 from .sources import Source, build_sources, run_source
 from .text import fingerprint, match_watch, similar
 
@@ -287,5 +289,25 @@ class Engine:
                 log.exception('housekeeping_error')
             await asyncio.sleep(60)
 
+    async def digest_loop(self) -> None:
+        """到点出日报（北京时间，见 settings.digest_slots）。失败只记日志，下一分钟不会重试同一期以外的事。"""
+        tried: set = set()
+        while True:
+            await asyncio.sleep(60)
+            try:
+                now_bj = datetime.now(llm.BJ)
+                with store.opened() as db:
+                    settings = store.get_settings(db)
+                    done = digest.done_slots_today(db)
+                slot = digest.due_slot(settings, now_bj, done)
+                key = f'{now_bj:%Y-%m-%d} {slot}'
+                if slot and key not in tried and scorer.has_key(self.env):
+                    tried.add(key)   # 每期只自动试一次，失败了可以在网页手动出
+                    await asyncio.to_thread(digest.generate, self.env, slot)
+            except llm.LLMError as e:
+                log.warning('digest_error error=%s', e)
+            except Exception:
+                log.exception('digest_loop_error')
+
     async def run(self) -> None:
-        await asyncio.gather(self.fetch_loop(), self.score_loop(), self.housekeeping())
+        await asyncio.gather(self.fetch_loop(), self.score_loop(), self.housekeeping(), self.digest_loop())

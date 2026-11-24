@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, data TEXT NOT N
 CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, text TEXT NOT NULL, ts REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS usage (day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0,
   tin INTEGER NOT NULL DEFAULT 0, tout INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, kind));
+CREATE TABLE IF NOT EXISTS digests (id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, slot TEXT NOT NULL DEFAULT '',
+  created REAL NOT NULL, title TEXT NOT NULL, data TEXT NOT NULL, since REAL NOT NULL DEFAULT 0, n_items INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS saved (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT NOT NULL, kind TEXT NOT NULL,
+  ref TEXT NOT NULL DEFAULT '', link TEXT NOT NULL DEFAULT '', ts REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS source_state (name TEXT PRIMARY KEY, ok REAL, err TEXT NOT NULL DEFAULT '',
   fails INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0);
 '''
@@ -217,3 +221,18 @@ def source_result(db: sqlite3.Connection, name: str, error: str = '', count: int
 def prune(db: sqlite3.Connection, days: int = 30) -> None:
     db.execute('DELETE FROM items WHERE fetched < ?', (time.time() - days * 86400,))
     db.execute('DELETE FROM chat WHERE id NOT IN (SELECT id FROM chat ORDER BY id DESC LIMIT 200)')
+    db.execute('DELETE FROM digests WHERE created < ?', (time.time() - 90 * 86400,))
+
+
+def mark_saved(db: sqlite3.Connection, target: str, kind: str, ref: str, link: str = '') -> None:
+    """记一笔“存到 Notion / 发到 Telegram 群”，网页上显示“已存”。"""
+    db.execute('INSERT INTO saved(target, kind, ref, link, ts) VALUES(?,?,?,?,?)', (target, kind, ref, link, time.time()))
+
+
+def saved_refs(db: sqlite3.Connection, target: str, kind: str, refs: Iterable[str]) -> dict:
+    refs = [str(r) for r in refs]
+    if not refs:
+        return {}
+    marks = ','.join('?' * len(refs))
+    return {r['ref']: r['link'] for r in db.execute(
+        f'SELECT ref, link FROM saved WHERE target=? AND kind=? AND ref IN ({marks})', [target, kind, *refs])}
