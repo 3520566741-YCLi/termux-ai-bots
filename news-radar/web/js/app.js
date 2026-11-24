@@ -84,6 +84,16 @@
     v.hidden = false;
     setTimeout(() => R.$('#login-token').focus(), 300);
   });
+  // 登录链接失败时后端会跳回 /?auth=bad|locked：直接显示玻璃登录页并说明原因，再把参数从地址栏去掉
+  (() => {
+    const why = new URLSearchParams(location.search).get('auth');
+    if (!why) return;
+    history.replaceState(null, '', location.pathname + location.hash);
+    R.$('#login-err').textContent = why === 'locked'
+      ? '输错次数太多，已暂时锁定，10 分钟后再试'
+      : '链接里的口令不对，可以改用 6 位登录码';
+    R.emit('auth');
+  })();
   R.$('#login-form').addEventListener('submit', async e => {
     e.preventDefault();
     const input = R.$('#login-token');
@@ -97,7 +107,7 @@
       location.reload();
     } catch (ex) {
       input.focus();
-      err.textContent = ex.status === 401 || ex.status === 403 ? '口令不对，再试一次' : ex.message;
+      err.textContent = ex.status === 401 ? '口令不对，再试一次' : ex.message;
       R.haptic('heavy');
     }
   });

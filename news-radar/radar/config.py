@@ -9,7 +9,20 @@
 import os
 from pathlib import Path
 
-BASE = Path(os.environ.get('AI_COUNCIL_HOME', Path(__file__).resolve().parents[2]))
+def _base() -> Path:
+    # 服务里设了 AI_COUNCIL_HOME=~/ai-council。手动在终端跑命令时没设：代码在 ~/news-radar-app 里，
+    # 这时也要用 ~/ai-council 的数据，否则会在代码目录里另造一份数据和口令（11-24 登录链接口令不对就是这个原因）。
+    env = os.environ.get('AI_COUNCIL_HOME')
+    if env:
+        return Path(env)
+    here = Path(__file__).resolve().parents[2]
+    home = Path.home() / 'ai-council'
+    if not (here / 'data' / 'radar' / 'radar.db').exists() and (home / 'data' / 'radar' / 'radar.db').exists():
+        return home
+    return here
+
+
+BASE = _base()
 RUNTIME = BASE / 'runtime'
 DATA = Path(os.environ.get('RADAR_DATA', BASE / 'data' / 'radar'))
 LOGS = Path(os.environ.get('RADAR_LOGS', BASE / 'logs' / 'radar'))

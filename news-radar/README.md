@@ -43,7 +43,10 @@ bash ~/news-radar-app/news-radar/deploy/install.sh               # 备份 → �
 ```bash
 sudo tailscale set --operator=$USER            # 只要一次（用户本人运行）
 tailscale serve --bg --https=8443 http://127.0.0.1:8790
-cd ~/news-radar-app/news-radar && ~/.local/share/news-radar/venv/bin/python -m radar web-url   # 登录链接（带口令）
+cd ~/news-radar-app/news-radar && ~/.local/share/news-radar/venv/bin/python -m radar login-code   # 6 位一次性登录码（10 分钟有效）
+```
+手机打开 https://<机器名>:8443/ 输入登录码即可；也可以用 `web-url` 拿带口令的长链接。
+```
 ```
 iPhone Safari 打开链接 → 分享 → 添加到主屏幕。网页推送要从主屏幕图标打开后再开。
 

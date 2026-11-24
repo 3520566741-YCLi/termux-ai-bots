@@ -6,6 +6,7 @@
 - 不记录请求 URL（登录链接里有口令），日志里不写消息内容和密钥。
 """
 import hmac
+import hashlib
 import json
 import logging
 import mimetypes
@@ -36,10 +37,16 @@ _fail_lock = threading.Lock()
 _heavy = threading.Semaphore(3)   # DeepSeek / Notion 这类慢请求最多同时 3 个
 
 
-def token() -> str:
-    path = Path(os.environ.get('RADAR_WEB_TOKEN_FILE') or config.DATA / 'web_token')
-    path.parent.mkdir(parents=True, exist_ok=True)
+def token_path() -> Path:
+    return Path(os.environ.get('RADAR_WEB_TOKEN_FILE') or config.DATA / 'web_token')
+
+
+def token(create: bool = True) -> str:
+    path = token_path()
     if not path.exists():
+        if not create:
+            raise FileNotFoundError(str(path))
+        path.parent.mkdir(parents=True, exist_ok=True)
         old = os.umask(0o077)
         try:
             path.write_text(secrets.token_urlsafe(18))
@@ -58,6 +65,55 @@ def locked() -> bool:
 def note_fail() -> None:
     with _fail_lock:
         _fails.append(time.time())
+
+
+# ---------- 一次性登录码（6 位数字，10 分钟有效，用一次就失效；手机上手打比长口令方便） ----------
+CODE_TTL = 600
+
+
+def code_path() -> Path:
+    return token_path().with_name('login_code')
+
+
+def new_code() -> str:
+    code = f'{secrets.randbelow(10 ** 6):06d}'
+    path = code_path()
+    old = os.umask(0o077)
+    try:
+        tmp = path.with_suffix('.tmp')
+        tmp.write_text(json.dumps({'h': hashlib.sha256(code.encode()).hexdigest(), 'exp': time.time() + CODE_TTL}))
+        os.replace(tmp, path)
+    finally:
+        os.umask(old)
+    return code
+
+
+_code_lock = threading.Lock()
+
+
+def use_code(given: str) -> bool:
+    if not re.fullmatch(r'\d{6}', given or ''):
+        return False
+    with _code_lock:
+        path = code_path()
+        try:
+            rec = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return False
+        if time.time() > float(rec.get('exp', 0)):
+            path.unlink(missing_ok=True)
+            return False
+        if not hmac.compare_digest(hashlib.sha256(given.encode()).hexdigest(), str(rec.get('h', ''))):
+            return False
+        path.unlink(missing_ok=True)   # 用一次就失效
+        return True
+
+
+def check_login(given: str) -> bool:
+    given = (given or '').strip()
+    if not given:
+        return False
+    return use_code(given) or hmac.compare_digest(given, token())
 
 
 class ApiError(Exception):
@@ -627,11 +683,15 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         try:
             if url.path == '/login':
+                # 失败时回到首页的玻璃登录页，并说清是锁定还是口令不对（不再给白底纯文字）
+                if locked():
+                    return self.send(303, b'', 'text/plain', {'Location': '/?auth=locked'})
                 given = parse_qs(url.query).get('t', [''])[0]
-                if not locked() and given and hmac.compare_digest(given, token()):
+                if check_login(given):
                     return self.send(303, b'', 'text/plain', {'Location': '/', 'Set-Cookie': self.cookie_header()})
                 note_fail()
-                return self.send(403, '口令不对，或输错太多次（10 分钟后再试）。'.encode(), 'text/plain; charset=utf-8')
+                log.info('login_fail via=link len=%d', len(given))
+                return self.send(303, b'', 'text/plain', {'Location': '/?auth=bad'})
             if url.path == '/api/mem/sync':
                 return self.json(200, mem_get(self.headers, parse_qs(url.query)))
             if url.path.startswith('/img/'):
@@ -664,10 +724,12 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == '/api/login':
                 if locked():
                     return self.json(429, {'error': '输错太多次，10 分钟后再试'})
-                if hmac.compare_digest(str(body.get('token') or '').strip(), token()):
+                given = str(body.get('token') or '')
+                if check_login(given):
                     return self.json(200, {'ok': True}, {'Set-Cookie': self.cookie_header()})
                 note_fail()
-                return self.json(403, {'error': '口令不对'})
+                log.info('login_fail via=form len=%d', len(given.strip()))
+                return self.json(403, {'error': '口令或登录码不对（登录码 10 分钟内有效、只能用一次）'})
             if url.path in ('/api/mem/pair', '/api/mem/sync'):
                 return self.json(200, mem_post(url.path, self.headers, body))
             if not self.authed():

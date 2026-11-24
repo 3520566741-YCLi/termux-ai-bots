@@ -6,6 +6,7 @@
   python -m radar ntfy-topic     显示 ntfy 订阅地址（手机 ntfy App 里订阅它）
   python -m radar web            手机网页后端（默认 127.0.0.1:8790，由 tailscale serve 转成 HTTPS）
   python -m radar web-url        显示手机网页的登录链接（带口令，别外传）
+  python -m radar login-code     给一个 6 位一次性登录码（10 分钟有效，用一次就失效），在手机登录页手打
   python -m radar demo           用假数据起一个本地网页（只用于前端调试；RADAR_DATA 必须是空目录）
 """
 import asyncio
@@ -106,9 +107,20 @@ def main(argv: list) -> int:
         from . import web
         web.serve()
         return 0
-    if cmd == 'web-url':
+    if cmd in ('web-url', 'login-code'):
         from . import web
-        print(web_url(web.token()))
+        try:
+            tok = web.token(create=False)   # 只读服务在用的口令，绝不另造一个
+        except FileNotFoundError as e:
+            print(f'找不到网页口令文件 {e}：先确认 news-radar-web 服务在跑（systemctl --user status news-radar-web）。')
+            return 2
+        if cmd == 'web-url':
+            print(web_url(tok))
+            print('数据目录：', config.DATA, file=sys.stderr)
+        else:
+            base = web_url(tok).split('/login')[0]
+            print(f'登录码：{web.new_code()}（10 分钟内有效，只能用一次）')
+            print(f'手机打开 {base}/ ，在登录页输入这 6 位数字。')
         return 0
     if cmd == 'demo':
         from . import demo

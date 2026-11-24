@@ -85,6 +85,54 @@ class WebTests(ServerBase):
         self.assertEqual(self.req('/api/login', {'token': 'wrong'}, cookie=False)[0], 403)
         web._fails.clear()
 
+    def test_login_code_once(self):
+        code = web.new_code()
+        self.assertRegex(code, r'^\d{6}$')
+        self.assertEqual(self.req('/api/login', {'token': code}, cookie=False)[0], 200)
+        self.assertEqual(self.req('/api/login', {'token': code}, cookie=False)[0], 403)   # 只能用一次
+        code = web.new_code()
+        rec = json.loads(web.code_path().read_text())
+        rec['exp'] = time.time() - 1
+        web.code_path().write_text(json.dumps(rec))
+        self.assertEqual(self.req('/api/login', {'token': code}, cookie=False)[0], 403)   # 过期
+        web._fails.clear()
+
+    def test_login_link_redirects(self):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **k):
+                return None
+        op = urllib.request.build_opener(NoRedirect)
+
+        def go(t):
+            try:
+                op.open(self.base + '/login?t=' + t)
+            except urllib.error.HTTPError as e:
+                return e.code, e.headers
+        code, h = go('wrong')
+        self.assertEqual((code, h['Location']), (303, '/?auth=bad'))
+        code, h = go(web.token())
+        self.assertEqual((code, h['Location']), (303, '/'))
+        self.assertIn('Set-Cookie', h)
+        web._fails.extend([time.time()] * 10)
+        code, h = go(web.token())
+        self.assertEqual(h['Location'], '/?auth=locked')
+        self.assertNotIn('Set-Cookie', h)
+        web._fails.clear()
+
+    def test_token_not_created_by_cli(self):
+        import os
+        old = os.environ.get('RADAR_WEB_TOKEN_FILE')
+        os.environ['RADAR_WEB_TOKEN_FILE'] = str(Path(TMP) / 'nope' / 'web_token')
+        try:
+            with self.assertRaises(FileNotFoundError):
+                web.token(create=False)
+            self.assertFalse((Path(TMP) / 'nope').exists())
+        finally:
+            if old is None:
+                os.environ.pop('RADAR_WEB_TOKEN_FILE')
+            else:
+                os.environ['RADAR_WEB_TOKEN_FILE'] = old
+
     def test_csrf(self):
         r = urllib.request.Request(self.base + '/api/settings', data=b'{"push_threshold":1}',
                                    headers={'Cookie': self.cookie, 'Content-Type': 'application/json'})
