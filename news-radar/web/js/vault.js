@@ -1,4 +1,4 @@
-/* 资讯雷达 · 收藏页（内部名 vault）
+/* Tidings · 收藏页（内部名 vault）
    - 信息流只是临时缓存；用户点书签收藏的资讯永久保留完整图文，真正需要的再存到 Notion
    - 接口：R.api.saved({q, before, limit}) / R.api.unsave(id) / POST /api/save {item_id, note}
    - 事件：R.on('saved-changed') → 下次 show() 重新拉取；本页取消收藏/撤销也会 emit
@@ -162,19 +162,22 @@
 
   // ---------- 备注 ----------
   const noteSaving = new Map();   // id → 正在保存的备注
+  const noteDrafts = new Map();   // id → 没保存上的备注草稿（下次打开时放回输入框，不丢字）
   async function saveNote(it, text) {
     text = String(text || '').trim();
-    if (text === (it.note || '')) return true;
+    if (text === (it.note || '')) { noteDrafts.delete(it.id); return true; }
     if (noteSaving.get(it.id) === text) return true;   // 失焦和关弹层会各触发一次，同样的内容只发一次
     noteSaving.set(it.id, text);
     try {
       await R.api.save(it.id, text);
       it.note = text;
+      noteDrafts.delete(it.id);
       refreshCard(it);
       R.toast(text ? '备注已保存' : '备注已清空', 'ok');
       return true;
     } catch (e) {
-      R.toast(e.message || '备注没保存上，请再试一次', 'err');
+      noteDrafts.set(it.id, text);
+      R.toast('备注没保存上，已留草稿：' + (e.message || '请再试一次'), 'err');
       return false;
     } finally {
       if (noteSaving.get(it.id) === text) noteSaving.delete(it.id);
@@ -182,7 +185,7 @@
   }
   function noteArea(it) {
     const ta = R.el('textarea.field.vt-note-input', { rows: 3, maxlength: 2000, placeholder: '写点备注：为什么收藏、之后要看什么…', 'aria-label': '备注' });
-    ta.value = it.note || '';
+    ta.value = noteDrafts.has(it.id) ? noteDrafts.get(it.id) : (it.note || '');
     const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, 240) + 'px'; };
     ta.addEventListener('input', grow);
     requestAnimationFrame(grow);
@@ -196,6 +199,7 @@
       title: it.note ? '编辑备注' : '添加备注',
       body: R.el('div.vt-note-edit', R.el('p.vt-menu-t.break.clamp2', it.title || ''), ta),
       foot: doneBtn,
+      autosave: true,   // 关弹层就自动保存（失败留草稿），不弹「不要刚写的内容了？」
       onClose: () => { if (!saved) saveNote(it, ta.value); },
     });
     doneBtn.addEventListener('click', async () => {
@@ -246,6 +250,7 @@
       title: '收藏',
       body,
       foot: actions(it, 'reader', ctx),
+      autosave: true,
       onClose: () => { commit(); },
     });
     sh.el.classList.add('vt-reader-sheet');
@@ -306,38 +311,26 @@
     try { R.emit('saved-changed', d); } finally { S.muteEvent = false; }
   }
 
+  // 撤销：用共享的 R.toast 操作按钮（显示 5 秒）
   function showUndo(it) {
-    clearUndo();
-    const btn = R.el('button.vt-undo-btn.press', { type: 'button' }, '撤销');
-    const bar = R.el('div.vt-undo.glass.strong', { role: 'status' },
-      R.el('span.vt-undo-t', R.icon('bookmark', 'sm'), R.el('span', '已取消收藏')), btn);
-    document.body.appendChild(bar);
-    requestAnimationFrame(() => requestAnimationFrame(() => bar.classList.add('show')));
-    const u = { bar, it, timer: setTimeout(() => clearUndo(), 4200) };
+    const u = {};
     S.undo = u;
-    btn.addEventListener('click', async () => {
-      if (S.undo !== u) return;
-      clearTimeout(u.timer);
+    R.toast('已取消收藏', null, { action: '撤销', onAction: async () => {
+      if (S.undo === u) S.undo = null;
       try {
-        await R.busy(btn, R.api.save(it.id, it.note || ''));
+        await R.api.save(it.id, it.note || '');
       } catch (e) {
         R.toast(e.message || '没能恢复收藏', 'err');
-        clearUndo();
         return;
       }
-      clearUndo();
       insertItem(it);
       render({ enter: it.id });
       emit({ id: it.id, saved: savedAt(it) });
+      R.toast('已恢复收藏', 'ok');
       R.haptic();
-    });
+    } });
   }
-  function clearUndo() {
-    const u = S.undo; if (!u) return;
-    S.undo = null; clearTimeout(u.timer);
-    u.bar.classList.remove('show');
-    setTimeout(() => u.bar.remove(), 420);
-  }
+  function clearUndo() { S.undo = null; }
 
   // ---------- 渲染 ----------
   function renderSub() {
@@ -357,8 +350,26 @@
     R.clear(ui.subline, R.el('span.vt-sub-t', parts.join(' · ')));
   }
 
+  // 静默刷新时以屏幕上第一张可见卡片为锚，渲染后把它放回原来的位置（上面补进新收藏时列表不跳）
+  function scrollAnchor() {
+    const top = (S.ui.filterBar && !S.ui.filterBar.hidden ? S.ui.filterBar.getBoundingClientRect().bottom : 0);
+    for (const n of S.ui.list.querySelectorAll('.vt-card')) {
+      const r = n.getBoundingClientRect();
+      if (r.bottom > top + 8) return { n, y: r.top };
+    }
+    return null;
+  }
   function render(opt) {
     opt = opt || {};
+    const anchor = opt.keepScroll && window.scrollY > 0 ? scrollAnchor() : null;
+    try { renderInner(opt); } finally {
+      if (anchor && anchor.n.isConnected) {
+        const d = anchor.n.getBoundingClientRect().top - anchor.y;
+        if (Math.abs(d) > 1) window.scrollBy(0, d);
+      }
+    }
+  }
+  function renderInner(opt) {
     const ui = S.ui;
     renderSub();
     ui.filterBar.hidden = !S.items.length && !S.loading;
@@ -443,21 +454,29 @@
       const r = await R.api.saved({ q: S.q, limit: LIMIT });
       if (seq !== S.seq) return;
       const prev = new Map(S.items.map(x => [x.id, x]));
+      const oldItems = S.items, oldNext = S.next, oldDone = S.done;
       S.items = (Array.isArray(r.items) ? r.items : []).filter(x => x && x.id != null).map(x => {
         const old = prev.get(x.id);
         if (old && S.nodes.has(x.id) && sameCard(old, x)) { Object.assign(old, x); return old; }
         S.nodes.delete(x.id);
         return x;
       });
-      for (const id of Array.from(S.nodes.keys())) if (!S.items.some(x => x.id === id)) S.nodes.delete(id);
       S.next = r.next_before == null ? null : r.next_before;
       S.done = S.next == null;
+      // 静默刷新只拿回第一页：之前往下翻已加载的更早收藏要留着，不然列表变短、阅读位置丢失
+      if (opt.silent && !S.done && S.items.length && oldItems.length > S.items.length) {
+        const edge = savedAt(S.items[S.items.length - 1]);
+        const have = new Set(S.items.map(x => x.id));
+        const older = oldItems.filter(x => !have.has(x.id) && savedAt(x) < edge);
+        if (older.length) { S.items = S.items.concat(older); S.next = oldNext; S.done = oldDone; }
+      }
+      for (const id of Array.from(S.nodes.keys())) if (!S.items.some(x => x.id === id)) S.nodes.delete(id);
     } catch (e) {
       if (seq !== S.seq) return;
       if (opt.silent && S.items.length) R.toast(e.message || '刷新失败', 'err');
       else { S.items = []; S.nodes.clear(); S.error = e; }
     } finally {
-      if (seq === S.seq) { S.loading = false; render(); }
+      if (seq === S.seq) { S.loading = false; render({ keepScroll: opt.silent && S.active && !opt.toTop }); }
     }
   }
   const sameCard = (a, b) => ['title', 'summary', 'note', 'notion_url', 'image', 'saved', 'score', 'tier', 'source_label', 'rumor'].every(k => a[k] === b[k]);
@@ -580,6 +599,8 @@
     });
     R.on('status', () => { if (S.active && !S.done) renderSub(); });
     R.on('visible', () => { if (S.active && S.dirty) reload({ silent: true }); });
+    // 实时刷新：别处（Vesper、另一台设备）收藏/取消收藏 → 不在打字时静默刷新，否则等下次
+    R.on('pulse', d => { if (!d.changed.saved) return; S.dirty = true; if (S.active && !(R.isTyping && R.isTyping())) reload({ silent: true }); });
 
     reload();
   }
@@ -596,7 +617,7 @@
   }
   function onTabReselect() {
     // app.js 已经平滑滚到顶，这里负责刷新
-    reload({ silent: S.items.length > 0 });
+    reload({ silent: S.items.length > 0, toTop: true });
   }
 
   R.pages = R.pages || {};

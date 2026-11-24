@@ -1,6 +1,8 @@
 /* 资讯雷达 · 快讯页（只用 base.css 的变量，私有样式以 #page-feed / .fc- 前缀） */
 
 #page-feed .fc-body { position: relative; }
+/* 列表补新/卡片重建时由 feed.js 自己决定要不要补偿滚动，关掉浏览器的滚动锚定，免得两边一起补导致跳两次 */
+#page-feed { overflow-anchor: none; }
 #page-feed .fc-body.fc-settling { transition: transform .4s var(--ease); }
 
 /* ---------- 顶部 ---------- */
@@ -19,9 +21,9 @@
   padding: 0; -webkit-appearance: none; appearance: none; }
 #page-feed .fc-input::placeholder { color: var(--ink-3); }
 #page-feed .fc-input::-webkit-search-cancel-button, #page-feed .fc-input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
-#page-feed .fc-clear { flex: none; width: 36px; height: 36px; border: 0; padding: 0; border-radius: 50%; background: none; display: grid; place-items: center; color: var(--ink-2); }
+#page-feed .fc-clear { flex: none; width: 44px; height: 44px; margin: -2px -4px -2px 0; border: 0; padding: 0; border-radius: 50%; background: none; display: grid; place-items: center; color: var(--ink-2); }
 #page-feed .fc-clear svg.i { width: 18px; height: 18px; padding: 4px; border-radius: 50%; background: var(--ink-3); color: var(--bg-2); stroke-width: 3; }
-#page-feed .fc-cancel { flex: none; height: 44px; padding: 0 2px; border: 0; background: none; color: var(--tint); font-size: 17px; }
+#page-feed .fc-cancel { flex: none; height: 44px; min-width: 44px; padding: 0 6px; margin-right: -6px; border: 0; background: none; color: var(--tint); font-size: 17px; }
 
 #page-feed .fc-sub { min-width: 0; }
 #page-feed .fc-sub-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -43,6 +45,8 @@
 #page-feed .fc { position: relative; overflow: hidden; padding: 14px 16px 14px; cursor: pointer; outline: none;
   transition: transform .35s var(--ease), background-color .6s; }
 #page-feed .fc:focus-visible { box-shadow: 0 0 0 2px var(--tint); }
+/* 卡片是整块可点的：长按不选字、不弹图片菜单（要复制文字到详情里选） */
+#page-feed .fc { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 
 #page-feed .fc-head { display: flex; align-items: center; gap: 7px; min-width: 0; height: 30px; }
 #page-feed .fc-head .score { width: 28px; height: 28px; border-radius: 9px; font-size: 15px; }
@@ -104,8 +108,7 @@
 #page-feed .fc-slim-meta .fc-time { margin: 0; padding: 0; font-size: 12px; }
 #page-feed .fc-slim-meta svg.i { margin-left: 5px; color: var(--ink-3); }
 #page-feed .fc-slim .fc-save { margin: -6px 0; }
-#page-feed .fc-slim.no-url { cursor: default; }
-#page-feed .fc-slim.no-url .fc-slim-title { color: var(--ink-3); }
+#page-feed .fc-slim.no-url .fc-slim-title { color: var(--ink-2); }
 #page-feed .fc-slim[data-s="1"] .fc-slim-title, #page-feed .fc-slim[data-s="2"] .fc-slim-title { color: var(--ink-2); }
 
 /* 5 分：左侧色条 + 极淡底色 */
@@ -165,6 +168,10 @@
 .fd-tier { display: inline-flex; align-items: center; gap: 4px; }
 .fd-dot { color: var(--ink-3); }
 .fd-title { margin: 10px 0 0; font-size: 21px; line-height: 1.34; font-weight: 700; letter-spacing: -.2px; color: var(--ink); -webkit-user-select: text; user-select: text; }
+.fd-key { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0 0; padding: 8px 12px; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--tint) 9%, transparent); font-size: 15px; line-height: 1.45; font-weight: 600; color: var(--ink);
+  -webkit-user-select: text; user-select: text; }
+.fd-key svg.i { flex: none; margin-top: 4px; color: var(--tint); }
 .fd-sum { margin: 10px 0 0; font-size: 16px; line-height: 1.55; color: var(--ink); opacity: .86; -webkit-user-select: text; user-select: text; }
 .fd-push { display: flex; align-items: center; gap: 5px; margin: 12px 0 0; font-size: 13px; color: var(--ink-2); }
 .fd-push .late { color: var(--amber); }

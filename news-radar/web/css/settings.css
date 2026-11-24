@@ -62,7 +62,7 @@
 
 /* ntfy 地址 */
 #page-settings .st-url-row { align-items: center; }
-#page-settings .st-mono { font-family: var(--mono); font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; word-break: break-all;
+#page-settings .st-mono { font-family: var(--mono); font-size: 13px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 3em;
   margin-top: 2px; -webkit-user-select: all; user-select: all; }
 #page-settings .st-url-row .icon-btn { margin-right: -6px; }
 
@@ -139,3 +139,11 @@
 #page-settings .icon-btn:not(.plain), .st-mem-acts .icon-btn { background: none; }
 #page-settings .st-ml2 { display: block; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .st-mem-edit .field { text-align: left; padding: 11px 14px; min-height: 44px; }
+
+/* 测试推送没送到：不用红叉，点开看原因 */
+#page-settings .st-fail { border: 0; height: 30px; min-height: 30px; padding: 0 10px; background: var(--fill); color: var(--ink-2); font: inherit; font-size: 12px; font-weight: 600; position: relative; }
+#page-settings .st-fail::after { content: ""; position: absolute; inset: -7px 0; }
+/* 点击区域补到 44px：步进器按钮、设备卡里的小按钮（视觉大小不变） */
+#page-settings .stepper button { height: 44px; margin: -6px 0; }
+#page-settings .st-pend-btns .btn, .st-dev .btn.sm { position: relative; }
+#page-settings .st-pend-btns .btn::after, .st-dev .btn.sm::after { content: ""; position: absolute; inset: -5px 0; }

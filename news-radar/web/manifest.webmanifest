@@ -1,7 +1,7 @@
 {
-  "name": "资讯雷达",
-  "short_name": "资讯雷达",
-  "description": "24 小时私人股票和加密货币资讯雷达",
+  "name": "Tidings",
+  "short_name": "Tidings",
+  "description": "24 小时私人股票和加密货币资讯助手",
   "lang": "zh-CN",
   "start_url": "/#feed",
   "scope": "/",

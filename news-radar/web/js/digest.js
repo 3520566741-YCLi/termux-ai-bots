@@ -1,4 +1,4 @@
-/* 资讯雷达 · 日报页
+/* Tidings · 日报页
    一期日报（头条 / 关注的标的 / 重点消息 / 传闻待核实 / 接下来盯）+ 历史 + 朗读 + 讨论文案 + 存到 Notion + 现在出一期。
    后端字段一律走 R.el 的文本节点，链接经 R.safeUrl。 */
 'use strict';
@@ -31,6 +31,10 @@
     if (s.digest_enabled === false) return '自动日报已关闭，可以在“设置”里打开。';
     if (!slots || !slots.length) return '';
     return '每天 ' + slots.join('、') + ' 自动生成。';
+  }
+  function sameDigest(a, b) {
+    try { return JSON.stringify([a.title, a.created, a.n_items, a.notion_url, a.data]) === JSON.stringify([b.title, b.created, b.n_items, b.notion_url, b.data]); }
+    catch (_) { return false; }
   }
   function nextSlot() {
     const s = R.state.status && R.state.status.settings;
@@ -307,6 +311,8 @@
       const changed = !cur || cur.id !== d.id;
       if (changed) ttsStop();
       else if (tts.on) { cur = d; setSub(d); return; } // 正在朗读同一期：不重绘，免得打断
+      // 静默刷新拿回来的还是同一期、内容没变：不重绘，保留滚动位置和按钮状态
+      if (silent && !changed && sameDigest(cur, d)) { d.refs = d.refs || {}; cur = d; viewingLatest = opt.id == null; setSub(d); return; }
       cur = d; viewingLatest = opt.id == null;
       d.refs = d.refs || {};
       setSub(d);
@@ -437,6 +443,12 @@
         if (p) p.textContent = ns ? `下一期 ${ns} 自动生成` : '想看最新情况？';
       });
       R.on('visible', () => { if (visible && viewingLatest && Date.now() - loadedAt > 60000) load({ latest: true, silent: true }); });
+      // 实时刷新：出了新一期。在顶部就直接换上；正在往下读就只提示，不打断
+      R.on('pulse', d => {
+        if (!d.changed.digest) return;
+        if (visible && viewingLatest && window.scrollY < 120 && !(R.isTyping && R.isTyping())) load({ latest: true, silent: true });
+        else { loadedAt = 0; if (visible) R.toast('新一期日报好了，点「日报」回到顶部查看'); }
+      });
       load({ latest: true });
     },
     show() {

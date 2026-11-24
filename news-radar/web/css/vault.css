@@ -9,16 +9,16 @@
 #page-vault .vt-search.open { grid-template-rows: 1fr; opacity: 1; }
 #page-vault .vt-search-in { overflow: hidden; min-height: 0; }
 #page-vault .vt-search-row { display: flex; align-items: center; gap: 10px; padding: 4px 0 10px; }
-#page-vault .vt-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 2px 0 10px;
+#page-vault .vt-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 2px 0 10px;
   border-radius: var(--r-sm); background: var(--fill); color: var(--ink-2); }
 #page-vault .vt-field:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--tint) 45%, transparent); }
-#page-vault .vt-input { flex: 1; min-width: 0; height: 40px; border: 0; background: none; outline: none; font-size: 17px; color: var(--ink);
+#page-vault .vt-input { flex: 1; min-width: 0; height: 44px; border: 0; background: none; outline: none; font-size: 17px; color: var(--ink);
   padding: 0; -webkit-appearance: none; appearance: none; }
 #page-vault .vt-input::placeholder { color: var(--ink-3); }
 #page-vault .vt-input::-webkit-search-cancel-button, #page-vault .vt-input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
-#page-vault .vt-clear { flex: none; width: 36px; height: 36px; border: 0; padding: 0; border-radius: 50%; background: none; display: grid; place-items: center; }
+#page-vault .vt-clear { flex: none; width: 44px; height: 44px; border: 0; padding: 0; border-radius: 50%; background: none; display: grid; place-items: center; }
 #page-vault .vt-clear svg.i { width: 18px; height: 18px; padding: 4px; border-radius: 50%; background: var(--ink-3); color: var(--bg-2); stroke-width: 3; }
-#page-vault .vt-cancel { flex: none; height: 44px; padding: 0 2px; border: 0; background: none; color: var(--tint); font-size: 17px; }
+#page-vault .vt-cancel { flex: none; height: 44px; min-width: 44px; padding: 0 2px; border: 0; background: none; color: var(--tint); font-size: 17px; }
 
 #page-vault .vt-sub { min-width: 0; }
 #page-vault .vt-sub-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -26,7 +26,7 @@
 /* ---------- 吸顶筛选条 ---------- */
 #page-vault .vt-filter { position: sticky; z-index: 30; top: calc(var(--safe-t) + 44px); margin: 0; padding: 6px 0 2px; pointer-events: none; }
 #page-vault .vt-seg { pointer-events: auto; width: 100%; overflow: hidden; }
-#page-vault .vt-seg button { flex: 1 1 0; min-width: 0; padding: 0 6px; height: 34px; overflow: hidden; text-overflow: ellipsis; }
+#page-vault .vt-seg button { flex: 1 1 0; min-width: 0; padding: 0 6px; height: 38px; overflow: hidden; text-overflow: ellipsis; }
 #page-vault .vt-seg button.press:active, #page-vault .vt-seg button.press.is-pressed { transform: none; opacity: .65; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) #page-vault .vt-seg .seg-thumb { background: var(--fill-2); } }
 :root[data-theme="dark"] #page-vault .vt-seg .seg-thumb { background: var(--fill-2); }
@@ -146,21 +146,8 @@ svg.i.vt-chev { color: var(--ink-3); stroke-width: 2.4; }
 .vt-r-noteh { display: flex; align-items: center; justify-content: space-between; min-height: 44px; margin: 14px 4px 0; font-size: 13px; color: var(--ink-2); }
 .vt-note-done { min-height: 44px; padding: 0 4px 0 12px; border: 0; background: none; color: var(--tint); font-size: 16px; font-weight: 600; }
 
-/* ---------- 撤销条：玻璃胶囊，悬浮在 Tab 栏上方 ---------- */
-.vt-undo { position: fixed; z-index: 70; left: 50%; bottom: calc(var(--safe-b) + 10px + var(--tabbar-h) + 12px);
-  width: min(calc(100% - 2 * var(--gutter)), 420px); min-height: 50px; border-radius: 999px;
-  display: flex; align-items: center; gap: 8px; padding: 3px 4px 3px 18px;
-  transform: translate(-50%, 16px) scale(.96); opacity: 0; transition: transform .45s var(--ease), opacity .25s; pointer-events: none; }
-.vt-undo.show { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
-.vt-undo-t { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; }
-.vt-undo-t svg.i { color: var(--ink-2); }
-.vt-undo-btn { flex: none; min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--fill); color: var(--tint); font-size: 15px; font-weight: 700; }
-.vt-undo-btn.is-busy { opacity: .5; pointer-events: none; }
-.vt-undo-btn .spinner { display: none; }
-.vt-undo-btn.is-busy .spinner { display: inline-block; vertical-align: -2px; margin-right: 6px; }
-
 @media (prefers-reduced-motion: reduce) {
-  #page-vault .vt-card, #page-vault .vt-group, .vt-undo { transition: opacity .2s; }
+  #page-vault .vt-card, #page-vault .vt-group { transition: opacity .2s; }
   #page-vault .vt-media img, .vt-hero img { transition: none; }
   #page-vault .vt-card.vt-enter { animation: none; }
 }
@@ -169,3 +156,5 @@ svg.i.vt-chev { color: var(--ink-3); stroke-width: 2.4; }
 /* 吸顶筛选条背后的渐隐底（与快讯一致），滚过的内容不会在顶栏和胶囊之间露出半截 */
 #page-vault .vt-filter::before { content: ""; position: absolute; z-index: -1; left: calc(-1 * var(--gutter)); right: calc(-1 * var(--gutter)); top: 0; bottom: -12px;
   background: linear-gradient(to bottom, var(--bg) 0%, var(--bg) 50%, color-mix(in srgb, var(--bg) 70%, transparent) 78%, transparent 100%); pointer-events: none; }
+/* 静默刷新时由 vault.js 自己按可见卡片校正滚动；关掉浏览器自带的滚动锚定，免得两边一起调导致跳两次 */
+#page-vault { overflow-anchor: none; }

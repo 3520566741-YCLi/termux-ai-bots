@@ -13,7 +13,8 @@
 #page-digest .dg-banner-s { font-size: 13px; color: var(--ink-2); margin-top: 1px; }
 #page-digest .dg-banner.is-err { background: color-mix(in srgb, var(--red) 10%, var(--bg-2)); }
 #page-digest .dg-banner.is-err > svg.i { color: var(--red); }
-#page-digest .dg-banner .btn.sm { flex: none; }
+#page-digest .dg-banner .btn.sm { flex: none; position: relative; }
+#page-digest .dg-banner .btn.sm::after { content: ""; position: absolute; inset: -5px -4px; } /* 点按区域补足 44px */
 #page-digest .dg-banner-x { width: 36px; height: 44px; margin: 0 -6px 0 -4px; background: none; color: var(--ink-2); }
 
 /* 头条卡 */
@@ -100,6 +101,7 @@
 /* 页尾 */
 #page-digest .dg-foot { display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 30px 0 4px; text-align: center; }
 #page-digest .dg-foot p { margin: 0; font-size: 13px; color: var(--ink-2); }
+#page-digest .dg-foot .btn { min-height: 44px; }
 #page-digest .dg-foot .btn svg.i { width: 16px; height: 16px; }
 #page-digest .dg-foot .btn.is-busy svg.i { display: none; }
 

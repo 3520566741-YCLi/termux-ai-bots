@@ -1,4 +1,4 @@
-/* 资讯雷达 · 设置页（iOS 设置 App 风格分组列表）
+/* Tidings · 设置页（iOS 设置 App 风格分组列表）
    数据：R.state.status（R.on('status')）；改设置 POST /api/settings（防抖 600ms，失败回滚）。
    安全：后端字段只走 textContent；Token 只在输入框里，提交成功即清空，不存本地、不打日志。 */
 'use strict';
@@ -89,7 +89,7 @@
       ok = true;
       R.toast('已保存', 'ok');
     } catch (e) {
-      R.toast(e.offline ? '连不上雷达，没保存上' : '没保存上：' + e.message, 'err');
+      R.toast(e.offline ? '连不上 Tidings，没保存上' : '没保存上：' + e.message, 'err');
     } finally {
       inflight = false; inflightPatch = {};
       if (ok && R.state.status) R.emit('status', R.state.status); else render();
@@ -129,12 +129,12 @@
   // 1. 顶部状态卡
   function heroCard(st) {
     const e = st.engine || {};
-    let cls = 'good', title = '雷达运行中', sub = e.heartbeat_age != null ? '心跳 ' + secAgo(e.heartbeat_age) : '';
-    if (!e.ok && e.heartbeat_age == null) { cls = 'bad'; title = '雷达没有运行'; sub = '没收到心跳，检查 Mini PC 上的雷达进程'; }
-    else if (!e.ok) { cls = 'warn'; title = '雷达可能卡住了'; sub = '上次心跳 ' + secAgo(e.heartbeat_age); }
+    let cls = 'good', title = 'Tidings 运行中', sub = e.heartbeat_age != null ? '心跳 ' + secAgo(e.heartbeat_age) : '';
+    if (!e.ok && e.heartbeat_age == null) { cls = 'bad'; title = 'Tidings 没有运行'; sub = '没收到心跳，检查 Mini PC 上的 Tidings 进程'; }
+    else if (!e.ok) { cls = 'warn'; title = 'Tidings 可能卡住了'; sub = '上次心跳 ' + secAgo(e.heartbeat_age); }
     const u = st.usage || {}, t = st.today || {};
     const cost = Number(u.cost_cny || 0).toFixed(2);
-    return el('section.card.st-hero', { 'aria-label': '雷达状态' },
+    return el('section.card.st-hero', { 'aria-label': 'Tidings 状态' },
       el('div.st-hero-top',
         el('span.st-pulse.' + cls, el('span.dot' + (cls === 'good' ? '.live' : cls === 'warn' ? '.warn' : '.bad'))),
         el('div.grow',
@@ -163,8 +163,9 @@
     const testBtn = el('button.row.has-icon.press-row', { type: 'button', onclick: () => doTest(testBtn) },
       rowIcon('sent', 'var(--blue)'), el('span.grow.label.st-tint', '发一条测试推送'));
     const testRes = lastTest ? el('div.row.st-test-res', { role: 'status' },
-      Object.keys(lastTest).length ? Object.keys(lastTest).map(k => el('span.chip.' + (lastTest[k] ? 'good' : 'bad'),
-        icon(lastTest[k] ? 'check' : 'close', 'xs'), (CH_NAME[k] || k) + (lastTest[k] ? ' 成功' : ' 失败')))
+      Object.keys(lastTest).length ? Object.keys(lastTest).filter(k => !(k === 'webpush' && !webpushReady()))   /* 本机没开网页推送就不显示它的结果，免得「已送达」「失败」都让人困惑 */.map(k => lastTest[k]
+        ? el('span.chip.good', icon('check', 'xs'), (CH_NAME[k] || k) + ' 已送达')
+        : el('button.chip.st-fail.press', { type: 'button', onclick: () => R.toast(failWhy(k), 'err') }, (CH_NAME[k] || k) + ' 没送到 · 为什么'))
         : el('span.small.muted', '没有开启任何推送渠道')) : null;
 
     return [
@@ -175,10 +176,27 @@
         stepRow('star', 'var(--yellow)', '非关注标的', 'push_unwatched_min', 1, 5, v, n => '至少 ' + n + ' 分才推'),
         stepRow('clock', 'var(--teal)', '每小时最多', 'max_push_per_hour', 1, 60, v, n => n + ' 条'),
         switchRow('bell', 'var(--red)', 'ntfy', null, ch.includes('ntfy'), on => setChannel('ntfy', on)),
-        switchRow('phone', 'var(--green)', '网页推送', null, ch.includes('webpush'), on => setChannel('webpush', on)),
+        webpushReady()
+          ? switchRow('phone', 'var(--green)', '网页推送', null, ch.includes('webpush'), on => setChannel('webpush', on))
+          : switchRow('phone', 'var(--green)', '网页推送', webpushWhy(), false, () => {}, { disabled: true }),
         testBtn, testRes),
       el('p.section-f', !ch.length ? '两个渠道都关了，重要消息不会推到手机。' : '关注的标的达到门槛就推；不在关注里的消息要达到第二个分数才推。'),
     ];
+  }
+  // 网页推送只有“从主屏幕打开 + 允许通知 + 这台设备已订阅”才可能送到
+  function webpushReady() {
+    return !!(R.standalone && wp.checked && wp.sub && ('Notification' in window) && Notification.permission === 'granted');
+  }
+  function webpushWhy() {
+    if (!R.standalone) return '要先添加到主屏幕，从主屏幕打开后才能开';
+    if ('Notification' in window && Notification.permission === 'denied') return '通知权限被关掉了，见下方说明';
+    if (!wp.checked) return '正在检查…';
+    return '在下方「网页推送」里开启这台设备';
+  }
+  function failWhy(k) {
+    if (k === 'webpush') return webpushReady() ? '推送服务这次没送到，过一会儿再试。' : webpushWhy();
+    if (k === 'ntfy') return 'ntfy 这次没送到：检查 Mini PC 的网络，或稍后再试。';
+    return '这次没送到，稍后再试。';
   }
   function setChannel(name, on) {
     const cur = Array.isArray(view().channels) ? view().channels : [];
@@ -306,7 +324,7 @@
     const out = [el('h2.section-h', '网页推送')];
     if (!avail) {
       out.push(el('div.list', el('div.row.has-icon', rowIcon('phone', 'var(--green)'), el('div.grow', el('div.label', '网页推送'), el('div.sub', '后端没有启用网页推送')))),
-        el('p.section-f', '需要在 Mini PC 上安装网页推送依赖（requirements-webpush.txt）后重启雷达。现在可以先用 ntfy。'));
+        el('p.section-f', '需要在 Mini PC 上安装网页推送依赖（requirements-webpush.txt）后重启 Tidings。现在可以先用 ntfy。'));
       return out;
     }
     if (!R.standalone) {
@@ -316,7 +334,7 @@
         el('ol.st-steps',
           step('share', '在 Safari 点底部的“分享”'),
           step('addSq', '选“添加到主屏幕”'),
-          step('home', '从主屏幕打开资讯雷达，再回来开启'))));
+          step('home', '从主屏幕打开 Tidings，再回来开启'))));
       return out;
     }
     if (!hasPM) {
@@ -330,7 +348,7 @@
       { disabled: !wp.checked || wp.busy || (perm === 'denied' && !on) });
     out.push(el('div.list', row),
       el('p.section-f' + (perm === 'denied' ? '.st-warn-text' : ''), perm === 'denied'
-        ? '去 iPhone “设置 → 通知 → 资讯雷达”打开“允许通知”，再回来开启。'
+        ? '去 iPhone “设置 → 通知 → Tidings”打开“允许通知”，再回来开启。'
         : '开启后，即使没打开网页也能在锁屏收到推送。每台设备要各自开启一次。'));
     return out;
   }
@@ -386,9 +404,13 @@
     return [
       el('h2.section-h', '日报'),
       el('div.list',
-        switchRow('digest', 'var(--purple)', '自动出日报', null, !!v.digest_enabled, on => { change('digest_enabled', on); render(); })),
+        switchRow('digest', 'var(--purple)', '自动出日报', null, !!v.digest_enabled, on => {
+          // 不整页重绘（会打断开关的滑动动画），只把下面的时间列表变暗/变亮；保存回来后再统一刷新
+          change('digest_enabled', on);
+          const sl = root && root.querySelector('.st-slots'); if (sl) sl.classList.toggle('st-dim', !on);
+        })),
       el('h2.section-h.st-sub-h', '出报时间'),
-      el('div.list' + (v.digest_enabled ? '' : '.st-dim'),
+      el('div.list.st-slots' + (v.digest_enabled ? '' : '.st-dim'),
         rows.length ? rows : el('div.row', el('span.grow.muted', '还没有设置时间')),
         slots.length < 6 ? el('button.row.press-row', { type: 'button', onclick: () => openAddSlot(slots) },
           el('span.st-add-ic', R.icon('plus', 'sm')), el('span.grow.label.st-tint', '添加时间')) : null),
@@ -618,7 +640,7 @@
         rows.length ? rows : el('div.row', el('span.grow.muted', '没有来源')),
         src.length > 5 ? el('button.row.press-row', { type: 'button', onclick: () => { showAllSources = !showAllSources; render(); } },
           el('span.grow.label.st-tint', showAllSources ? '收起' : '显示全部（共 ' + src.length + ' 个）')) : null),
-      el('p.section-f', (bad ? bad + ' 个来源出错，雷达会自动重试。' : '') + 'A 官方 · B 主流媒体 · C 社交/传闻。右边数字是累计抓到的条数。'),
+      el('p.section-f', (bad ? bad + ' 个来源出错，Tidings 会自动重试。' : '') + 'A 官方 · B 主流媒体 · C 社交/传闻。右边数字是累计抓到的条数。'),
     ];
   }
 
@@ -627,10 +649,10 @@
     return [
       el('h2.section-h', '关于'),
       el('div.list',
-        el('div.row', el('span.grow.label', '版本'), el('span.value', '网页版 1.0')),
-        el('div.row', el('span.grow.label', '数据'), el('span.value', R.api.demo ? '演示模式' : '已连接雷达')),
+        el('div.row', el('span.grow.label', '版本'), el('span.value', 'Tidings 网页版 1.1')),
+        el('div.row', el('span.grow.label', '数据'), el('span.value', R.api.demo ? '演示模式' : '已连接 Tidings')),
         R.api.demo ? el('button.row.press-row', { type: 'button', onclick: async () => {
-          if (await R.confirm({ title: '退出演示模式？', text: '退出后连接真实雷达，需要口令登录。', ok: '退出演示' })) R.api.exitDemo();
+          if (await R.confirm({ title: '退出演示模式？', text: '退出后连接真实 Tidings，需要口令登录。', ok: '退出演示' })) R.api.exitDemo();
         } }, el('span.grow.label.st-tint', '退出演示模式')) : null,
         el('button.row.press-row', { type: 'button', onclick: hardReload }, el('span.grow.label.st-tint', '刷新页面'))),
       el('p.section-f', '页面显示不对或刚更新过版本时，点“刷新页面”会清掉缓存重新加载。'),
@@ -722,11 +744,11 @@
       el('div.list',
         el('button.row.has-icon.press-row', { type: 'button', onclick: openMemories },
           rowIcon('stack', 'var(--purple)'), el('span.grow.label', '记忆'),
-          el('span.value.tnum', (m.count || 0) + ' 条'), chev()),
+          el('span.value.tnum', m.count ? m.count + ' 条' : '还没有'), chev()),
         el('button.row.has-icon.press-row', { type: 'button', onclick: openDevices },
           rowIcon('phone', 'var(--indigo)'), el('span.grow.label', '同步设备'),
           pend ? el('span.chip.bad', pend + ' 台待批准') : null,
-          el('span.value.tnum', (m.devices || 0) + ' 台'), chev())),
+          el('span.value.tnum', m.devices ? m.devices + ' 台' : '未配对'), chev())),
       el('p.section-f', 'Vesper 记住的事在手机和 Mac 之间共用。Mac 上装同步小程序后会来这里申请。'),
     ];
   }

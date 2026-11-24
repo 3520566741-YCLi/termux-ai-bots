@@ -82,7 +82,7 @@
 
 /* ---------- 基础 ---------- */
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; background: var(--bg); }
 html, body { margin: 0; height: 100%; }
 body {
   font-family: var(--font); font-size: 17px; line-height: 1.4; color: var(--ink); background: var(--bg);
@@ -91,6 +91,7 @@ body {
 }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+a, label, .press, input, textarea, select, [role=button] { touch-action: manipulation; }   /* 去掉双击缩放带来的点击延迟 */
 a { color: var(--tint); text-decoration: none; }
 [hidden] { display: none !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -195,6 +196,7 @@ svg.i.xs { width: 13px; height: 13px; stroke-width: 2.2; }
 .btn.block { display: flex; width: 100%; }
 .btn.sm { min-height: 34px; padding: 0 14px; font-size: 15px; }
 .btn[disabled], .btn.is-busy { opacity: .45; pointer-events: none; }
+.is-busy { pointer-events: none; }   /* 任何按钮请求进行中都不能再点，防双击重复提交 */
 .btn.is-busy .spinner { display: inline-block; }
 .btn.glass { color: var(--ink); }
 .icon-btn { width: 44px; height: 44px; border-radius: 50%; border: 0; background: none; display: grid; place-items: center; color: var(--ink); flex: none; padding: 0; }
@@ -313,11 +315,11 @@ textarea.field { resize: none; line-height: 1.5; display: block; }
 .break { overflow-wrap: anywhere; word-break: break-word; }
 
 /* iOS 26 滚动边缘：底部 Tab 栏下方渐隐，让透出的内容不显得乱 */
-#app::after { content: ""; position: fixed; z-index: 45; left: 0; right: 0; bottom: 0; pointer-events: none;
-  height: calc(var(--tabbar-h) + var(--safe-b) + 10px + 36px);
-  /* Tab 栏下沿以下完全不透（不让文字从玻璃栏和 Safari 工具栏之间露出来），Tab 栏上方 36px 渐隐 */
-  background: linear-gradient(to top, var(--bg) 0, var(--bg) calc(var(--safe-b) + 10px + var(--tabbar-h) * .5),
-    color-mix(in srgb, var(--bg) 82%, transparent) calc(var(--safe-b) + 10px + var(--tabbar-h)), transparent 100%); }
+#app::after { content: ""; position: fixed; z-index: 45; left: 0; right: 0; bottom: -160px; pointer-events: none;
+  /* 向下多伸 160px：iOS 26 Safari 的浮动工具栏一带在布局视口之外，页面内容会画到那里，用实心底盖住 */
+  height: calc(var(--tabbar-h) + var(--safe-b) + 10px + 36px + 160px);
+  /* Tab 栏中线以下完全实心（不让文字从玻璃栏和 Safari 工具栏之间露出来），往上渐隐；用 mask 做渐隐，避免半透明色在部分浏览器失真 */
+  -webkit-mask-image: linear-gradient(to top, #000 calc(100% - 36px - var(--tabbar-h) * .5), transparent 100%); mask-image: linear-gradient(to top, #000 calc(100% - 36px - var(--tabbar-h) * .5), transparent 100%); background: var(--bg); }
 .scrim.stacked { background: rgba(0,0,0,.42); }
 html.scrolled .demo-flag { opacity: 0; pointer-events: none; }
 html.kb-open .sheet { padding-bottom: 0; }
@@ -328,3 +330,27 @@ html.sheet-open .demo-flag { opacity: 0; pointer-events: none; }
 .sheet.glass { background: color-mix(in srgb, var(--bg) 93%, transparent); }
 /* 紧凑顶栏更实一些：背后滚过的大字不能读出来 */
 .topbar.glass { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+
+/* 实时刷新：断网 / 新版本 提示条（顶部居中玻璃胶囊，进出先透明下偏 14px，250ms 到位） */
+.live-banner { position: fixed; z-index: 110; left: 50%; top: calc(var(--safe-t) + 8px); transform: translate(-50%, -14px); opacity: 0;
+  display: flex; align-items: center; gap: 8px; min-height: 44px; max-width: calc(100% - 32px); padding: 0 6px 0 16px; border-radius: 999px;
+  font-size: 15px; font-weight: 600; white-space: nowrap; transition: opacity .25s, transform .25s var(--ease-out); }
+.live-banner.show { opacity: 1; transform: translate(-50%, 0); }
+.live-banner .spinner { width: 14px; height: 14px; color: var(--orange); }
+.live-retry { min-width: 44px; min-height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--fill); color: var(--tint); font-weight: 600; font-size: 15px; }
+.live-x { width: 44px; height: 44px; border: 0; background: none; color: var(--ink-2); display: grid; place-items: center; margin-left: -4px; }
+html.sheet-open .live-banner { z-index: 95; }
+/* 系统开「减少动态效果」：关掉所有动画和过渡 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+}
+
+/* 点击区补到 44：外观不变，透明扩展区 */
+.sheet-x, .btn.sm, .segmented button, .toast-act { position: relative; }
+.sheet-x::after { content: ''; position: absolute; inset: -4px; }
+.btn.sm::after { content: ''; position: absolute; left: 0; right: 0; top: -5px; bottom: -5px; }
+.segmented button::after { content: ''; position: absolute; left: 0; right: 0; top: -6px; bottom: -6px; }
+.toast-wrap .toast.has-act { pointer-events: auto; padding-right: 6px; }
+.toast-act { margin-left: 4px; min-height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--fill); color: var(--tint); font-weight: 600; font-size: 15px; white-space: nowrap; }
+.toast-act::after { content: ''; position: absolute; inset: -4px; }
+.toast:not(.show) { pointer-events: none !important; }   /* 隐藏的提示条不挡点击 */

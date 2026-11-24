@@ -1,18 +1,21 @@
-/* 资讯雷达 · Service Worker
+/* Tidings · Service Worker
    - 静态文件：先用缓存秒开，后台更新（stale-while-revalidate）
    - /api/*：永远走网络，不缓存（数据要新、且需要登录）
    - 网页推送：显示通知，点通知打开对应链接 */
 'use strict';
-const VERSION = 'radar-v7';
+const VERSION = 'radar-v8';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest',
   'css/base.css', 'css/feed.css', 'css/digest.css', 'css/vault.css', 'css/chat.css', 'css/settings.css', 'css/compose.css',
-  'js/ui.js', 'js/api.js', 'js/mock.js', 'js/compose.js', 'js/feed.js', 'js/digest.js', 'js/vault.js', 'js/chat.js', 'js/settings.js', 'js/app.js',
+  'js/ui.js', 'js/api.js', 'js/mock.js', 'js/compose.js', 'js/feed.js', 'js/digest.js', 'js/vault.js', 'js/chat.js', 'js/settings.js', 'js/app.js', 'js/live.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)));   // 不自动接管：页面提示「有新版本」，用户点了才切换
+});
+self.addEventListener('message', e => {
+  if (e.data === 'skip-waiting') self.skipWaiting();
 });
 
 self.addEventListener('activate', e => {
@@ -40,9 +43,9 @@ self.addEventListener('fetch', e => {
 
 self.addEventListener('push', e => {
   let d = {};
-  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { title: '资讯雷达', body: e.data ? e.data.text() : '' }; }
+  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { title: 'Tidings', body: e.data ? e.data.text() : '' }; }
   if (!d || typeof d !== 'object') d = {};
-  e.waitUntil(self.registration.showNotification(String(d.title || '资讯雷达').slice(0, 120), {
+  e.waitUntil(self.registration.showNotification(String(d.title || 'Tidings').slice(0, 120), {
     body: String(d.body || '').slice(0, 400),
     icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
     data: { url: typeof d.url === 'string' ? d.url : '/' },

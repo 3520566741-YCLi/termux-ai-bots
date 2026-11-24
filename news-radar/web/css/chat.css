@@ -134,3 +134,10 @@
 /* 右侧渐隐，提示关注胶囊可以横滑；滑到底时去掉 */
 #page-chat .cw-scroll { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent); }
 #page-chat .cw-scroll.at-end { -webkit-mask-image: none; mask-image: none; }
+/* 往上翻时来了新消息：输入栏上方的小胶囊，点了回到底部 */
+#chat-composer .cc-new { position: absolute; left: 50%; bottom: calc(100% + 10px); transform: translate(-50%, 8px); opacity: 0; pointer-events: none;
+  display: inline-flex; align-items: center; gap: 5px; min-height: 36px; padding: 0 14px; border: 0; border-radius: 999px;
+  font-size: 14px; font-weight: 600; color: var(--tint); white-space: nowrap; transition: opacity .2s, transform .3s var(--ease); }
+#chat-composer .cc-new.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+#chat-composer .cc-new.show.is-pressed { transform: translate(-50%, 0) scale(.96); }
+#chat-composer .cc-new::after { content: ""; position: absolute; inset: -4px 0; }

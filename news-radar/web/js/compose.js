@@ -1,4 +1,4 @@
-/* 资讯雷达 · 讨论文案弹层 + 存到 Notion（公共函数）
+/* Tidings · 讨论文案弹层 + 存到 Notion（公共函数）
    R.compose.open({ item_id?, digest_id?, title? })  打开“讨论文案”弹层
    R.saveToNotion(body, btn) → Promise<string url>  存到 Notion；失败会 toast 并 throw（err.handled = true）
    规则：文案只用 textarea.value / textContent，绝不 innerHTML。 */
@@ -128,7 +128,7 @@
       if (ph === 'error') {
         R.clear(errBox,
           R.el('div.cp-err-ic', R.icon(d.offline ? 'wifiOff' : 'warn')),
-          R.el('div.cp-err-t', d.offline ? '连不上雷达' : '没写出来'),
+          R.el('div.cp-err-t', d.offline ? '连不上 Tidings' : '没写出来'),
           R.el('div.cp-err-s.break', d.error || '请稍后再试。'),
           R.el('button.btn.sm.press', { type: 'button', onclick: () => generate() }, '重试'));
       }

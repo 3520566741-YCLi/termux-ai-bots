@@ -1,4 +1,4 @@
-/* 资讯雷达 · 演示数据（?demo=1 时启用，完全在浏览器里，不发请求）
+/* Tidings · 演示数据（?demo=1 时启用，完全在浏览器里，不发请求）
    自查用：?demo=1&mock=empty 全部为空；&mock=error 全部出错；&mock=slow 每个请求慢 3 秒。 */
 'use strict';
 (function (R) {
@@ -57,7 +57,7 @@
     ],
     ntfy: { subscribe_url: 'https://ntfy.sh/radar-demo-7f3k2' },
     webpush: { available: true, public_key: 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U' },
-    notion: { configured: true, title: '资讯雷达存档' },
+    notion: { configured: true, title: 'Tidings 存档' },
     tg: { configured: false, bot: '', chat_title: '' },
     today: { items: 3456, pushed: 3 },
     memory: { count: 4, devices: 1, pending_devices: 1 },
@@ -115,7 +115,7 @@
     const u = new URL(path, location.href);
     const p = u.pathname, q = u.searchParams;
     await wait(/draft|chat$|generate|notion|config/.test(p) && method === 'POST' ? 1400 : 350 + Math.random() * 250);
-    if (mode === 'error') { if (p === '/api/feed' || p === '/api/status') throw new R.api.ApiError('连不上雷达', 0, true); fail(); }
+    if (mode === 'error') { if (p === '/api/feed' || p === '/api/status') throw new R.api.ApiError('连不上 Tidings', 0, true); fail(); }
     const empty = mode === 'empty';
 
     if (method === 'GET' && p === '/api/status') {
@@ -220,8 +220,8 @@
     if (method === 'POST' && p === '/api/push/test') return { result: Object.fromEntries(status.settings.channels.map(c => [c, true])) };
     if (method === 'POST' && p === '/api/config/notion') {
       if (!body.db) fail('请填数据库链接或 ID');
-      status.notion = { configured: true, title: '资讯雷达存档' };
-      return { ok: true, title: '资讯雷达存档', columns: ['标题', '类型', '标的', '分数', '来源', '链接'] };
+      status.notion = { configured: true, title: 'Tidings 存档' };
+      return { ok: true, title: 'Tidings 存档', columns: ['标题', '类型', '标的', '分数', '来源', '链接'] };
     }
     if (method === 'POST' && p === '/api/config/tg') {
       if (!/^\d+:[\w-]{20,}$/.test(body.token || '')) { const e = new R.api.ApiError('Token 格式不对，应类似 123456:ABC-DEF…', 400); throw e; }
@@ -277,5 +277,13 @@
     }, 40000);
   }
 
-  R.mock = { handle, mode };
+  // 实时刷新：版本号随数据变化
+  function pulse() {
+    if (mode === 'error') return Promise.reject(new Error('offline'));
+    const top = items.reduce((m, x) => Math.max(m, x.id), 0);
+    return Promise.resolve({ feed: top + '.' + items.filter(x => x.saved).length + '.' + items.filter(x => x.notion_url).length, top,
+      saved: String(items.filter(x => x.saved).length), digest: digests[0] ? digests[0].id : 0, chat: chat.length,
+      status: JSON.stringify(status.settings).length + '.' + status.watch.length + '.' + status.memory.pending_devices });
+  }
+  R.mock = { handle, mode, pulse };
 })(window.R);

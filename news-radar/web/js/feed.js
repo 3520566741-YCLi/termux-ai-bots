@@ -1,10 +1,10 @@
-/* 资讯雷达 · 快讯页
+/* Tidings · 快讯页
    列表按 id 倒序；DOM 按需追加（不全量重建）；30 秒静默拉新；自己实现下拉刷新。
    后端字段一律走 R.el 文本节点，链接用 R.safeUrl / R.openUrl。 */
 'use strict';
 (function (R) {
   const PAGE_SIZE = 30;
-  const POLL_MS = 30000;
+  const POLL_MS = 60000;   // 兜底轮询；平时由 live.js 的 pulse（5 秒）触发
   const PULL_TRIGGER = 70;
   const LS_KEY = 'radar-feed-filter';
   const FILTERS = [
@@ -14,7 +14,7 @@
     { key: 'min4', label: '≥4 分', params: { min: 4 } },
   ];
   const EMPTY = {
-    all: { title: '还没有快讯', text: '雷达开始运行后，新消息会出现在这里。' },
+    all: { title: '还没有快讯', text: 'Tidings 开始运行后，新消息会出现在这里。' },
     watched: { title: '关注的标的暂时没有新消息', text: '可以在“助手”里说“帮我关注苹果”来添加关注。' },
     pushed: { title: '还没有推送过消息', text: '达到推送门槛的重要消息会出现在这里。' },
     min4: { title: '暂时没有 4 分以上的消息', text: '重要消息出现时会第一时间推送给你。' },
@@ -34,6 +34,10 @@
 
   // ---------- 小工具 ----------
   const nowS = () => Date.now() / 1000;
+  // 外链防连点：连点两下不会开两个标签页
+  let lastOpen = 0;
+  const openOnce = u => { if (Date.now() - lastOpen < 900) return; lastOpen = Date.now(); R.openUrl(u); };
+  const str = x => (x == null ? '' : String(x).trim());
   const strs = x => (Array.isArray(x) ? x : []).filter(v => v != null && v !== '').map(String);
   const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const sig = it => [it.saved ? 1 : 0, it.image, it.score, it.pushed, it.notion_url, it.confirms, it.title, it.summary, it.late_minutes, it.rumor, strs(it.tickers).join(','), strs(it.matched).join(',')].join('|');
@@ -107,10 +111,11 @@
     const s = it.score;
     const u = R.safeUrl(it.url || '');
     const ts = it.published || it.fetched || 0;
-    return R.el('article.card.fc.fc-slim' + (u ? '.press-card' : '.no-url'), {
+    // 没有原文链接的也能点：打开详情（能收藏 / 存 Notion / 看其他来源），不做“点了没反应”的卡片
+    return R.el('article.card.fc.fc-slim.press-card' + (u ? '' : '.no-url'), {
       'data-id': String(it.id), 'data-s': s == null ? '' : String(s),
-      tabindex: u ? '0' : null, role: u ? 'link' : null,
-      'aria-label': (it.title || '') + (u ? '，打开原文' : '，没有原文链接'),
+      tabindex: '0', role: u ? 'link' : 'button',
+      'aria-label': (it.title || '') + (u ? '，打开原文' : '，查看详情'),
     },
       R.el('span.fc-dot', { 'data-s': s == null ? '' : String(s), title: s == null ? '未打分' : s + ' 分 · ' + R.scoreText(s) }),
       R.el('div.fc-slim-text',
@@ -162,6 +167,13 @@
   }
 
   function putItem(it) { S.items.set(it.id, it); }
+  // 卡片重建（打分/推送/收藏等变化）时，同一张已加载的图直接显示，不再从透明淡入一次（避免闪）
+  function carryImages(oldNode, newNode) {
+    ['fc-img', 'fc-thumb'].forEach(cls => {
+      const o = oldNode.querySelector('.' + cls + '.loaded img'), n = newNode.querySelector('.' + cls + ' img');
+      if (o && n && o.src === n.src) n.parentNode.classList.add('loaded');
+    });
+  }
 
   function appendItems(list) {
     const frag = document.createDocumentFragment();
@@ -206,6 +218,7 @@
       const r0 = node.getBoundingClientRect();
       putItem(it);
       const c = card(it);
+      carryImages(node, c);
       node.replaceWith(c); S.nodes.set(it.id, c);
       if (r0.bottom <= 0) {
         // 卡片在视野上方：补偿滚动位置，眼前的内容不动
@@ -351,7 +364,8 @@
   }
 
   // ---------- 拉新（自动 / 下拉 / 再点页签） ----------
-  const atTop = () => window.scrollY < 60;
+  // 只有真在顶部才直接插入新消息；稍微往下滑了一点也算“在读”，改为显示“N 条新消息”胶囊，免得眼前内容被往下推
+  const atTop = () => window.scrollY < 8;
 
   async function poll(opt) {
     opt = opt || {};
@@ -377,7 +391,7 @@
       }
       if (!fresh.length) { if (opt.force) flushPending(); return; }
       S.pending = fresh.concat(S.pending).sort((a, b) => b.id - a.id);
-      if (opt.force || atTop()) flushPending();
+      if (opt.force || (atTop() && !(R.isTyping && R.isTyping()))) flushPending();
       else updatePill();
     } catch (e) {
       if (opt.force) R.toast(e.message || '刷新失败', 'err');
@@ -454,6 +468,7 @@
       if (!pulling) {
         if (dy < 6 || Math.abs(dx) > Math.abs(dy) || window.scrollY > 0) { if (dy < -4 || Math.abs(dx) > 10) y0 = null; return; }
         pulling = true; ind.hidden = false; ind.classList.remove('spinning');
+        R.$$('.is-pressed', S.root).forEach(n => n.classList.remove('is-pressed'));   // 开始下拉就不算点卡片了，去掉按下态
       }
       if (e.cancelable) e.preventDefault();   // 接管：不让系统回弹/滚动
       d = Math.max(0, dy);
@@ -559,16 +574,16 @@
     if (window.scrollY > stick) window.scrollTo(0, Math.max(0, stick));
   }
 
-  // ---------- 雷达状态 ----------
+  // ---------- Tidings 状态 ----------
   function renderStatus(s) {
     const sub = S.ui.subline; if (!sub) return;
-    if (!s) { R.clear(sub, R.el('span.dot.idle'), R.el('span.fc-sub-t', '正在连接雷达…')); return; }
+    if (!s) { R.clear(sub, R.el('span.dot.idle'), R.el('span.fc-sub-t', '正在连接 Tidings…')); return; }
     const ok = s.engine && s.engine.ok;
     const today = s.today || {};
     const mute = s.settings && s.settings.mute_until > nowS() ? s.settings.mute_until : 0;
     const parts = [];
-    if (ok) parts.push('雷达运行中', '今日 ' + (today.items || 0) + ' 条');
-    else parts.push('雷达未在运行');
+    if (ok) parts.push('Tidings 运行中', '今日 ' + (today.items || 0) + ' 条');
+    else parts.push('Tidings 未在运行');
     if (mute) parts.push('已静音到 ' + R.hm(mute));
     else if (ok) parts.push('推送 ' + (today.pushed || 0) + ' 条');
     R.clear(sub,
@@ -578,7 +593,8 @@
   }
 
   // ---------- 详情弹层 ----------
-  function openDetail(id) {
+  function openDetail(id, given) {
+    if (given && !S.items.has(id)) putItem(given);   // 推送深链：列表里还没有这条，也能打开
     const base = S.items.get(id);
     if (!base) return;
     R.haptic();
@@ -638,6 +654,7 @@
           R.el('span.fd-dot', '·'),
           R.el('span.tnum', ts ? R.md(ts) + ' ' + R.hm(ts) : '')),
         R.el('h2.fd-title.break', item.title || '（无标题）'),
+        str(item.keypoint) ? R.el('p.fd-key.break', R.icon('spark', 'xs'), R.el('span', str(item.keypoint))) : null,
         item.summary ? R.el('p.fd-sum.break', item.summary) : null,
         (item.pushed || item.late_minutes > 0) ? R.el('p.fd-push',
           R.icon('bell', 'xs'),
@@ -662,7 +679,7 @@
           u ? R.icon('chev', 'chev') : null,
         ];
         return u
-          ? R.el('button.row.press-row.fd-dup', { type: 'button', onclick: () => R.openUrl(u), 'aria-label': (d.source_label || '') + '：' + (d.title || '') + '，打开链接' }, inner)
+          ? R.el('button.row.press-row.fd-dup', { type: 'button', onclick: () => openOnce(u), 'aria-label': (d.source_label || '') + '：' + (d.title || '') + '，打开链接' }, inner)
           : R.el('div.row.fd-dup', inner);
       });
       R.clear(dupBox, R.el('h4.fd-h', '其他来源报道 · ' + dups.length), R.el('div.list', rows));
@@ -685,9 +702,9 @@
       if (R.compose && typeof R.compose.open === 'function') R.compose.open({ item_id: item.id, title: item.title });
       else R.toast('讨论文案暂时不可用', 'err');
     });
-    openBtn.addEventListener('click', () => R.openUrl(item.url));
+    openBtn.addEventListener('click', () => openOnce(item.url));
     notionBtn.addEventListener('click', async () => {
-      if (R.safeUrl(item.notion_url || '')) { R.openUrl(item.notion_url); return; }
+      if (R.safeUrl(item.notion_url || '')) { openOnce(item.notion_url); return; }
       if (notionBtn.classList.contains('is-busy')) return;
       try {
         let url;
@@ -713,7 +730,7 @@
     const old = S.items.get(it.id), node = S.nodes.get(it.id);
     if (!old || !node || sig(old) === sig(it)) return;
     putItem(it);
-    const c = card(it); node.replaceWith(c); S.nodes.set(it.id, c);
+    const c = card(it); carryImages(node, c); node.replaceWith(c); S.nodes.set(it.id, c);
   }
 
   // ---------- 搭页面 ----------
@@ -785,7 +802,7 @@
       const sb = e.target.closest('.fc-save');
       if (sb) { e.stopPropagation(); const it = S.items.get(+sb.dataset.save); if (it) toggleSave(it, sb); return; }
       const c = e.target.closest('.fc'); if (!c) return;
-      if (c.classList.contains('fc-slim')) { const it = S.items.get(+c.dataset.id); if (it && R.safeUrl(it.url || '')) R.openUrl(it.url); return; }
+      if (c.classList.contains('fc-slim')) { const it = S.items.get(+c.dataset.id); if (it && R.safeUrl(it.url || '')) { R.haptic(); openOnce(it.url); return; } }
       openDetail(+c.dataset.id);
     });
     ui.list.addEventListener('keydown', e => {
@@ -793,7 +810,7 @@
       if (e.target.closest('.fc-save')) return;
       const c = e.target.closest('.fc'); if (!c) return;
       e.preventDefault();
-      if (c.classList.contains('fc-slim')) { const it = S.items.get(+c.dataset.id); if (it) R.openUrl(it.url); return; }
+      if (c.classList.contains('fc-slim')) { const it = S.items.get(+c.dataset.id); if (it && R.safeUrl(it.url || '')) { R.openUrl(it.url); return; } }
       openDetail(+c.dataset.id);
     });
     ui.pill.addEventListener('click', scrollTopThenFlush);
@@ -813,12 +830,15 @@
     setupPull();
     renderStatus(R.state && R.state.status);
     R.on('status', renderStatus);
-    R.on('status-error', () => { if (!(R.state && R.state.status)) R.clear(ui.subline, R.el('span.dot.warn'), R.el('span.fc-sub-t', '暂时拿不到雷达状态')); });
+    R.on('status-error', () => { if (!(R.state && R.state.status)) R.clear(ui.subline, R.el('span.dot.warn'), R.el('span.fc-sub-t', '暂时拿不到 Tidings 状态')); });
     R.on('saved-changed', d => {
       if (!d || d.source === 'feed' || !S.items.has(d.id)) return;
       applySaved(d.id, d.saved || null);
     });
     R.on('visible', () => { if (S.active && Date.now() - S.lastPoll > 10000) poll(); });
+    // 实时刷新：/api/pulse 发现快讯有变化（新条目或打分/配图/推送等变化）才拉第一页，没变化不发请求
+    R.on('pulse', d => { if (S.active && (d.changed.feed || d.changed.top)) poll(); });
+    R.on('reconnected', () => { if (S.active) poll(); });
 
     // 字体就绪后再定位滑块
     requestAnimationFrame(() => moveThumb(false));
@@ -847,6 +867,35 @@
     const p = S.pending.length ? (flushPending(), poll({ force: true })) : refreshNow();
     S.showSpin ? S.showSpin(p) : p;
   }
+
+  // ---------- 推送深链：/?item=<id> 打开那条的详情 ----------
+  function stripItemParam() {
+    const q = new URLSearchParams(location.search); q.delete('item');
+    const qs = q.toString();
+    history.replaceState(history.state, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+  }
+  async function openFromLink() {
+    const raw = new URLSearchParams(location.search).get('item');
+    if (raw == null) return;
+    const id = Number(raw);
+    if (!raw.trim() || !Number.isFinite(id)) { stripItemParam(); return; }
+    if (R.state && R.state.page !== 'feed') { stripItemParam(); R.go('feed'); }
+    try {
+      const r = await R.api.item(id);
+      stripItemParam();
+      const it = r && r.item;
+      if (!it || it.id == null) { R.toast('这条消息已经被清理了，先看看最新的吧'); return; }
+      if (R.state && R.state.page !== 'feed') R.go('feed');
+      openDetail(it.id, it);
+    } catch (e) {
+      if (e && e.status === 401) return;   // 先登录；登录后整页刷新时参数还在，会再打开一次
+      stripItemParam();
+      if (e && e.status === 404) R.toast('这条消息已经被清理了，先看看最新的吧');
+      else R.toast(e && e.offline ? '连不上 Tidings，没能打开这条消息' : '没能打开这条消息：' + ((e && e.message) || '请稍后再试'), 'err');
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(openFromLink, 0));
+  else setTimeout(openFromLink, 0);
 
   R.pages = R.pages || {};
   R.pages.feed = { title: '快讯', mount, show, hide, onTabReselect };

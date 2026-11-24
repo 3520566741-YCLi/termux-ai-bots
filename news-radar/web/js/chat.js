@@ -1,4 +1,4 @@
-/* 资讯雷达 · 「助手」页：用聊天改关注列表和设置
+/* Tidings · 「助手」页：用聊天改关注列表和设置
    - 顶部：大标题 + 更多（清空聊天记录）
    - 关注列表条：横向胶囊，点开看详情 / 不再关注，“＋ 添加”表单
    - 聊天：iMessage 风格气泡；changes 用绿色小标签；失败可点红色感叹号重试
@@ -27,6 +27,7 @@
   let kbOpen = false;
   let addSheet = null;
   let stuck = true;             // 用户是否停在底部（滚动时更新，布局变化时据此保持贴底）
+  let newPill = null;           // 用户往上翻时来了新消息：输入栏上方出一个「新消息」胶囊，点了才回到底部
 
   // ---------- 小工具 ----------
   function moreIcon() {
@@ -46,6 +47,11 @@
     const p = document.createElementNS(SVGNS, 'path');
     p.setAttribute('d', 'M12 19V5M6 11l6-6 6 6');
     s.appendChild(p);
+    return s;
+  }
+  function downIcon() {
+    const s = upIcon(); s.setAttribute('class', 'i xs');
+    s.firstChild.setAttribute('d', 'M12 5v14M6 13l6 6 6-6');
     return s;
   }
   const nowSec = () => Date.now() / 1000;
@@ -206,20 +212,45 @@
 
   // ---------- 聊天记录 ----------
   async function load(opt) {
+    const silent = !!(opt && opt.silent);
+    const prevState = loadState, prevLen = messages.length;
     loadState = 'loading'; loadErr = null;
-    if (!(opt && opt.silent)) renderLog();
+    if (!silent) renderLog();
     try {
       const r = await R.api.chat();
-      if (sending) return; // 发送中不覆盖本地
+      if (sending) { loadState = 'ok'; return; } // 发送中不覆盖本地
+      // 本地发送失败、等着重试的消息后端没有，刷新时留着
+      const failed = messages.filter(m => m.status === 'failed');
       messages = (r && Array.isArray(r.messages) ? r.messages : []).map(m => ({
         role: m.role === 'user' ? 'user' : 'assistant', text: String(m.text == null ? '' : m.text), ts: +m.ts || 0,
         changes: Array.isArray(m.changes) ? m.changes : [],
-      }));
+      })).concat(failed);
       loadState = 'ok';
-    } catch (e) { loadState = 'error'; loadErr = e; }
+    } catch (e) {
+      // 静默刷新失败：保留现有记录，不换成错误页
+      if (silent && prevState === 'ok') { loadState = 'ok'; return; }
+      loadState = 'error'; loadErr = e;
+    }
+    if (silent && prevState === 'ok') {
+      // 实时补新消息：停在底部就跟着到底；往上翻着看就不强拉，只提示有新消息
+      const wasBottom = active && nearBottom();
+      renderLog();
+      if (messages.length > prevLen && active && !wasBottom) showNewPill();
+      return;
+    }
     renderLog();
     requestAnimationFrame(() => { if (!active) { needBottom = !!messages.length; return; } if (messages.length) toBottom(false); else window.scrollTo(0, 0); stuck = true; });
   }
+  function showNewPill() {
+    if (!composer) return;
+    if (!newPill) {
+      newPill = el('button.cc-new.glass.strong.press', { type: 'button', 'aria-label': '有新消息，回到底部', onclick: () => { hideNewPill(); toBottom(true); } },
+        downIcon(), el('span', '新消息'));
+      composer.prepend(newPill);
+    }
+    requestAnimationFrame(() => newPill && newPill.classList.add('show'));
+  }
+  function hideNewPill() { if (newPill) newPill.classList.remove('show'); }
 
   function skeletonLog() {
     const rows = [['l', 68], ['r', 42], ['l', 78], ['r', 55], ['l', 60]].map(([side, w]) =>
@@ -311,6 +342,7 @@
       const stick = nearBottom();
       renderLog();
       if (stick) requestAnimationFrame(() => toBottom(true));
+      else if (active) showNewPill();
     }
   }
   function retry(m) {
@@ -444,12 +476,14 @@
       renderWatch();
       R.on('status', renderWatch);
       R.on('status-error', () => { if (!watchList() && watchEl) renderWatchError(); });
+      // 实时刷新：Vesper 在别处（Mac）有新消息时补上；发送中不覆盖（输入框里没发的字不受影响，只刷新上面的记录）
+      R.on('pulse', d => { if (d.changed.chat && active && !sending && loadState !== 'loading') load({ silent: true }); });
       if (window.visualViewport) {
         window.visualViewport.addEventListener('resize', scheduleLayout);
         window.visualViewport.addEventListener('scroll', scheduleLayout);
       }
       window.addEventListener('resize', scheduleLayout);
-      window.addEventListener('scroll', () => { if (active) stuck = nearBottom(); }, { passive: true });
+      window.addEventListener('scroll', () => { if (!active) return; stuck = nearBottom(); if (stuck) hideNewPill(); }, { passive: true });
       window.addEventListener('orientationchange', () => setTimeout(layout, 300));
       load();
     },
@@ -463,12 +497,16 @@
     },
     hide() {
       active = false;
+      hideNewPill();
       if (document.activeElement === ta) ta.blur();
       composer.hidden = true;
       if (tabbar) tabbar.classList.remove('chat-kb-hide');
       kbOpen = false;
     },
     onTabReselect() {
+      // 聊天的「回到开头」是回到最新一条（app.js 刚发起的平滑滚到顶会被这次滚动取代）
+      hideNewPill();
+      toBottom(true); stuck = true;
       R.refreshStatus().catch(() => {});
       if (loadState === 'error') load();
     },

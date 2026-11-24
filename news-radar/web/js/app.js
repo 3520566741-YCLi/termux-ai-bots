@@ -1,4 +1,4 @@
-/* 资讯雷达 · 应用外壳：页签路由、顶栏、状态轮询、登录、PWA
+/* Tidings · 应用外壳：页签路由、顶栏、状态轮询、登录、PWA
    页面约定：R.pages.<名字> = { title, mount(root), show(), hide(), onTabReselect() }
    - mount 只调用一次；show/hide 每次切换调用；onTabReselect = 已在本页又点页签（滚到顶并刷新）
    - 全局状态：R.state.status（GET /api/status 的结果），变化时 R.emit('status', s)；R.refreshStatus() 立即刷新 */
@@ -114,7 +114,7 @@
 
   // ---------- 演示模式角标 ----------
   if (R.api.demo) {
-    const flag = R.el('button.demo-flag.glass.press', { title: '点一下退出演示模式', onclick: async () => { if (await R.confirm({ title: '退出演示模式？', text: '退出后连接真实雷达，需要口令登录。', ok: '退出演示' })) R.api.exitDemo(); } }, '演示数据');
+    const flag = R.el('button.demo-flag.glass.press', { title: '点一下退出演示模式', onclick: async () => { if (await R.confirm({ title: '退出演示模式？', text: '退出后连接真实 Tidings，需要口令登录。', ok: '退出演示' })) R.api.exitDemo(); } }, '演示数据');
     document.body.appendChild(flag);
   }
 

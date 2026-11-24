@@ -1,4 +1,4 @@
-/* 资讯雷达 · 接口层（约定见 API.md）
+/* Tidings · 接口层（约定见 API.md）
    - 所有 POST 带 Content-Type: application/json 和 X-Radar: 1
    - 401 → 触发 'auth' 事件，显示口令登录页
    - 演示模式：网址带 ?demo=1（本次会话记住），所有请求交给 R.mock，不发网络请求 */
@@ -27,15 +27,15 @@
     try { res = await fetch(path, init); }
     catch (e) {
       clearTimeout(timer);
-      if (e.name === 'AbortError') throw new ApiError('等太久了，雷达没有回应，请稍后再试。', 0, false);
-      throw new ApiError('连不上雷达', 0, true);
+      if (e.name === 'AbortError') throw new ApiError('等太久了，Tidings 没有回应，请稍后再试。', 0, false);
+      throw new ApiError('连不上 Tidings', 0, true);
     }
     clearTimeout(timer);
     let data = null;
     try { data = await res.json(); } catch (_) { data = null; }
     if (res.status === 401) { R.emit('auth', data && data.error); throw new ApiError((data && data.error) || '需要登录', 401); }
     if (!res.ok) throw new ApiError((data && data.error) || `出错了（${res.status}）`, res.status);
-    if (!data || typeof data !== 'object') throw new ApiError('雷达返回的数据不对，请稍后再试。', res.status);
+    if (!data || typeof data !== 'object') throw new ApiError('Tidings 返回的数据不对，请稍后再试。', res.status);
     return data;
   }
 

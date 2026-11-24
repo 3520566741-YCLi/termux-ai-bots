@@ -1,4 +1,4 @@
-/* 资讯雷达 · 通用界面工具（全局命名空间 R）
+/* Tidings · 通用界面工具（全局命名空间 R）
    规则：后端字段只用 textContent 显示（el() 的字符串子节点会变成文本节点），绝不拼 innerHTML。 */
 'use strict';
 window.R = window.R || {};
@@ -99,7 +99,7 @@ window.R = window.R || {};
 
   // ---------- 时间 ----------
   R.ago = function (ts) {
-    if (!ts) return '';
+    ts = +ts; if (!Number.isFinite(ts) || ts <= 0) return '';
     const s = Math.max(0, Date.now() / 1000 - ts);
     if (s < 45) return '刚刚';
     if (s < 3600) return Math.round(s / 60) + ' 分钟前';
@@ -108,8 +108,9 @@ window.R = window.R || {};
     return R.md(ts) + ' ' + R.hm(ts);
   };
   const tz = { timeZone: 'Asia/Shanghai' };
-  R.hm = ts => new Date(ts * 1000).toLocaleTimeString('zh-CN', { ...tz, hour: '2-digit', minute: '2-digit', hour12: false });
-  R.md = ts => new Date(ts * 1000).toLocaleDateString('zh-CN', { ...tz, month: 'numeric', day: 'numeric' });
+  const okTs = ts => Number.isFinite(+ts) && +ts > 0;
+  R.hm = ts => !okTs(ts) ? '' : new Date(ts * 1000).toLocaleTimeString('zh-CN', { ...tz, hour: '2-digit', minute: '2-digit', hour12: false });
+  R.md = ts => !okTs(ts) ? '' : new Date(ts * 1000).toLocaleDateString('zh-CN', { ...tz, month: 'numeric', day: 'numeric' });
 
   // ---------- 按下反馈：触屏上 :active 不可靠，统一补一个 class + 轻震动 ----------
   const PRESS = '.press, .press-row, .press-card';
@@ -121,18 +122,37 @@ window.R = window.R || {};
   }, { passive: true });
   const release = () => { if (pressed) { pressed.classList.remove('is-pressed'); pressed = null; } };
   ['pointerup', 'pointercancel', 'pointerleave', 'scroll'].forEach(ev => document.addEventListener(ev, release, { passive: true, capture: true }));
-  R.haptic = function (kind) { try { navigator.vibrate && navigator.vibrate(kind === 'heavy' ? 18 : 8); } catch (_) { /* iOS 不支持，忽略 */ } };
+  // 触感：安卓用 vibrate；iOS 18+ Safari 不支持 vibrate，借系统开关（<input switch>）被点时自带的轻触感
+  let hapticEl = null;
+  R.haptic = function (kind) {
+    try {
+      if (navigator.vibrate) { navigator.vibrate(kind === 'heavy' ? 18 : 8); return; }
+      if (!/iP(hone|ad|od)/.test(navigator.userAgent) && !(navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform))) return;
+      if (!hapticEl) {
+        const input = R.el('input', { type: 'checkbox', tabindex: '-1', 'aria-hidden': 'true' });
+        input.setAttribute('switch', '');
+        hapticEl = R.el('label', { 'aria-hidden': 'true', style: { display: 'none' } }, input);
+        document.body.appendChild(hapticEl);
+      }
+      hapticEl.click();
+      if (kind === 'heavy') setTimeout(() => hapticEl && hapticEl.click(), 90);
+    } catch (_) { /* 不支持就算了 */ }
+  };
 
   // ---------- 提示条 ----------
   let toastTimer = 0;
-  R.toast = function (text, kind) {
+  R.toast = function (text, kind, opt) {
     const wrap = R.$('#toast');
     const icon = kind === 'err' ? R.icon('warn', 'sm err') : kind === 'ok' ? R.icon('check', 'sm ok') : null;
-    const t = R.el('div.toast.glass.strong', { role: 'status' }, icon, R.el('span', String(text)));
+    const act = opt && opt.action ? R.el('button.toast-act.press', { type: 'button', onclick: () => {
+      clearTimeout(toastTimer); t.classList.remove('show');
+      try { opt.onAction && opt.onAction(); } catch (e) { console.error(e); }
+    } }, opt.action) : null;
+    const t = R.el('div.toast.glass.strong' + (act ? '.has-act' : ''), { role: 'status' }, icon, R.el('span', String(text)), act);
     R.clear(wrap, t);
     requestAnimationFrame(() => requestAnimationFrame(() => t.classList.add('show')));
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove('show'), kind === 'err' ? 3600 : 2200);
+    toastTimer = setTimeout(() => t.classList.remove('show'), act ? 5000 : kind === 'err' ? 3600 : 2200);
     if (kind === 'err') R.haptic('heavy');
   };
 
@@ -141,7 +161,7 @@ window.R = window.R || {};
   const stack = [];
   R.sheet = function (opt) {
     const scrim = R.el('div.scrim');
-    const closeBtn = R.el('button.icon-btn.plain.press', { 'aria-label': '关闭', style: { width: '36px', height: '36px' } }, R.icon('close', 'sm'));
+    const closeBtn = R.el('button.icon-btn.plain.press.sheet-x', { 'aria-label': '关闭', style: { width: '36px', height: '36px' } }, R.icon('close', 'sm'));
     const body = R.el('div.sheet-body', opt.body);
     const sheet = R.el('section.sheet.glass.strong' + (opt.className ? '.' + String(opt.className).split(/\s+/).join('.') : ''), { role: 'dialog', 'aria-modal': 'true', 'aria-label': opt.title || '' },
       R.el('div.grabber'),
@@ -166,8 +186,21 @@ window.R = window.R || {};
         opt.onClose && opt.onClose();
       },
     };
+    // 用户亲手打过字的弹层：点遮罩/下拉/Esc 不直接关，先问一句，免得手滑丢字（点 × 和保存后关闭照常）
+    let typed = false;
+    sheet.addEventListener('input', e => { if (e.isTrusted && e.target.matches('textarea, input:not([type=checkbox]):not([type=radio])')) typed = true; });
+    let asking = false;
+    api.dismiss = async function () {
+      if (done || asking) return;
+      const dirty = typed && Array.from(sheet.querySelectorAll('textarea, input:not([type=checkbox]):not([type=radio])')).some(x => x.value && x.value.trim());
+      if (!dirty || opt.autosave) return api.close();   // autosave 的弹层（如收藏备注）关掉就自动存，不用问
+      asking = true;
+      const ok = await R.confirm({ title: '不要刚写的内容了？', text: '关掉后这段文字不会保存。', ok: '不要了', cancel: '继续编辑', danger: true });
+      asking = false;
+      if (ok) api.close(); else sheet.style.transform = '';
+    };
     stack.push(api);
-    scrim.addEventListener('click', api.close);
+    scrim.addEventListener('click', api.dismiss);
     closeBtn.addEventListener('click', api.close);
     // 下拉关闭（只在弹层内容滚到顶时）
     let y0 = null, dy = 0;
@@ -184,7 +217,7 @@ window.R = window.R || {};
     sheet.addEventListener('touchend', () => {
       if (y0 == null) return;
       sheet.classList.remove('dragging');
-      if (dy > 110) api.close(); else sheet.style.transform = '';
+      if (dy > 110) api.dismiss(); else sheet.style.transform = '';
       y0 = null;
     });
     return api;
@@ -202,7 +235,7 @@ window.R = window.R || {};
     vv.addEventListener('resize', onVV); vv.addEventListener('scroll', onVV); onVV();
   }
   R.closeAllSheets = function () { stack.slice().reverse().forEach(s => s.close()); };
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && stack.length) stack[stack.length - 1].close(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && stack.length) stack[stack.length - 1].dismiss(); });
 
 
   // iOS 风格确认弹层：await R.confirm({title, text, ok: '删除', danger: true}) → true/false
@@ -248,7 +281,7 @@ window.R = window.R || {};
     const offline = err && err.offline;
     return R.stateBlock({
       err: true, icon: offline ? 'wifiOff' : 'warn',
-      title: offline ? '连不上雷达' : '出错了',
+      title: offline ? '连不上 Tidings' : '出错了',
       text: offline ? '检查手机网络或 Tailscale 是否已连接。' : (err && err.message) || '请稍后再试。',
       action: retry ? { label: '重试', onClick: retry } : null,
       action2: offline && !R.api.demo ? { label: '先用演示数据看看', onClick: () => R.api.enterDemo() } : null,
@@ -258,6 +291,7 @@ window.R = window.R || {};
   // 按钮忙碌态：await R.busy(btn, promise)
   R.busy = async function (btn, p) {
     if (!btn) return p;
+    if (btn.classList.contains('is-busy')) return p;   // 已在进行中：不叠第二个转圈
     btn.classList.add('is-busy'); btn.setAttribute('aria-busy', 'true');
     let sp = btn.querySelector('.spinner');
     if (!sp) { sp = R.el('span.spinner'); btn.prepend(sp); }
