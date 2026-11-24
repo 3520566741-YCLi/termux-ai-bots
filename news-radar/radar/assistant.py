@@ -19,7 +19,7 @@ SYSTEM = '''你是 Vesper，Mitchell 的私人助手。你同时住在他 Mac �
 说话风格：跟着他最近一句话的语言走；自然、口语、简短，像一个靠谱的朋友；先给结论，一般 1～3 句话。
 你现在在手机上，这里能做的事：
 - 资讯雷达 24 小时抓股票和加密货币快讯，DeepSeek 打 1~5 分，重要的用 ntfy 推到他手机。你可以查看/增加/删除关注标的、改推送门槛和静音、
-  查最近的消息（search_news）、看最新日报、把东西存到 Notion。
+  查最近的消息（search_news）、看最新日报、收藏资讯（save_item，没收藏的第二天只剩标题和链接）、把真正要长期留的存到 Notion。
 - 加关注时尽量补全：股票代码（美股如 AAPL、港股如 0700.HK、A 股如 600519.SH）、币种代码，以及中英文关键词（公司名、简称、CEO 名字、主要产品）。
 - 删关注、改门槛这类改动直接做（都能改回来），做完说一句怎么改回。
 - 长期记忆：他告诉你的稳定信息（偏好、习惯、决定、身边的人、在做的项目、对你的要求、投资偏好）用 memory_save 记下来，一条只记一件事，
@@ -75,6 +75,11 @@ TOOLS = [
     {'type': 'function', 'function': {
         'name': 'recall', 'description': '搜手机上以前的聊天记录',
         'parameters': {'type': 'object', 'required': ['query'], 'properties': {'query': {'type': 'string'}}}}},
+    {'type': 'function', 'function': {
+        'name': 'save_item', 'description': '把一条资讯收进“收藏”（完整图文永久保留；没收藏的第二天只剩标题和链接）',
+        'parameters': {'type': 'object', 'required': ['item_id'], 'properties': {
+            'item_id': {'type': 'integer'}, 'note': {'type': 'string', 'description': '可选备注'},
+            'unsave': {'type': 'boolean', 'description': 'true = 取消收藏'}}}}},
     {'type': 'function', 'function': {'name': 'latest_digest', 'description': '看最新一期日报的内容',
                                       'parameters': {'type': 'object', 'properties': {}}}},
     {'type': 'function', 'function': {
@@ -180,6 +185,19 @@ def run_tool(env: dict, name: str, args: dict, changes: list):
                               ('%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%',)).fetchall()
         return {'messages': [{'role': r['role'], 'text': r['text'][:200],
                               'when': datetime.fromtimestamp(r['ts'], llm.BJ).strftime('%m-%d %H:%M')} for r in rows]}
+    if name == 'save_item':
+        item_id = int(args.get('item_id'))
+        with store.opened() as db:
+            if args.get('unsave'):
+                n = db.execute('UPDATE items SET saved=NULL WHERE id=?', (item_id,)).rowcount
+            else:
+                n = db.execute('UPDATE items SET saved=COALESCE(saved, ?), save_note=?, '
+                               'img_state=CASE WHEN image="" THEN 0 ELSE img_state END WHERE id=?',
+                               (time.time(), str(args.get('note') or '')[:500], item_id)).rowcount
+        if not n:
+            return {'error': '找不到这条资讯'}
+        changes.append('取消收藏' if args.get('unsave') else '已收藏')
+        return {'ok': True}
     if name == 'latest_digest':
         d = digest.get()
         return {'title': d.get('title'), 'data': d.get('data')} if d else {'note': '还没有日报'}

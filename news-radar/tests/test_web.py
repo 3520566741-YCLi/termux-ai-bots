@@ -16,7 +16,7 @@ os.environ['RADAR_DATA'] = TMP
 os.environ['AI_COUNCIL_HOME'] = TMP
 os.environ['RADAR_WEB_TOKEN_FILE'] = str(Path(TMP) / 'web_token')
 
-from radar import assistant, config, digest, draft, llm, notion, store, web  # noqa: E402
+from radar import assistant, config, digest, draft, images, llm, notion, sources, store, web  # noqa: E402
 
 config.DATA = Path(TMP)
 config.DB_PATH = Path(TMP) / 'radar.db'
@@ -208,6 +208,66 @@ class MemoryTests(ServerBase):
             assistant.run_tool({}, 'memory_delete', {'id': 'zz'}, changes)
         assistant.run_tool({}, 'memory_delete', {'id': mid}, changes)
         self.assertEqual(len(changes), 3)
+
+
+class SaveAndImageTests(ServerBase):
+    DB = 'save-test.db'
+
+    def test_save_flow_and_trim(self):
+        with store.opened() as db:
+            old = add_item(db, 's1', '昨天的新闻', fetched=time.time() - 2 * 86400, body='正文' * 20)
+            keep = add_item(db, 's2', '昨天收藏的', fetched=time.time() - 2 * 86400, body='正文')
+            db.execute("UPDATE items SET image='a' WHERE id=?", (old,))
+        code, body, _ = self.req('/api/save', {'item_id': keep, 'note': '回头看'})
+        self.assertTrue(body['item']['saved'])
+        self.assertEqual(self.req('/api/status')[1]['saved']['count'], 1)
+        with store.opened() as db:
+            self.assertEqual(store.daily_trim(db), 1)
+        items = {i['id']: i for i in self.req('/api/feed?min=0')[1]['items']}
+        self.assertTrue(items[old]['slim'])
+        self.assertEqual((items[old]['summary'], items[old]['image']), ('', ''))
+        self.assertEqual(items[old]['url'], 'https://e.com/s1')             # 标题、来源、原网页链接还在
+        self.assertFalse(items[keep]['slim'])
+        saved = self.req('/api/saved?q=%E5%9B%9E%E5%A4%B4')[1]['items']
+        self.assertEqual([i['id'] for i in saved], [keep])
+        self.req('/api/unsave', {'item_id': keep})
+        self.assertEqual(self.req('/api/saved')[1]['items'], [])
+
+    def test_img_route(self):
+        (images.img_dir() / ('a' * 40 + '.jpg')).write_bytes(b'\xff\xd8x')
+        r = urllib.request.Request(self.base + '/img/' + 'a' * 40 + '.jpg', headers={'Cookie': self.cookie})
+        with urllib.request.urlopen(r) as resp:
+            self.assertEqual(resp.headers['Content-Type'], 'image/jpeg')
+        for path, cookie in (('/img/' + 'a' * 40 + '.jpg', ''), ('/img/../radar.db', self.cookie)):
+            with self.assertRaises(urllib.error.HTTPError):
+                urllib.request.urlopen(urllib.request.Request(self.base + path, headers={'Cookie': cookie}))
+
+
+class ImageParseTests(unittest.TestCase):
+    def test_rss_media(self):
+        rss = '''<rss xmlns:media="http://search.yahoo.com/mrss/"><channel><item><title>A</title><link>https://e.com/a</link>
+<media:content url="https://cdn.e.com/a.jpg" medium="image"/></item><item><title>B</title><link>https://e.com/b</link>
+<description>&lt;img src="https://cdn.e.com/b.png"&gt; text</description></item>
+<item><title>C</title><enclosure url="javascript:x" type="image/png"/></item></channel></rss>'''
+        out = sources.parse_feed('cointelegraph')(rss, '')
+        self.assertEqual([o['image_url'] for o in out], ['https://cdn.e.com/a.jpg', 'https://cdn.e.com/b.png', ''])
+
+    def test_telegram_photo(self):
+        html = ('<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message" data-post="X/1">'
+                '<a class="tgme_widget_message_photo_wrap" style="width:1px;background-image:url(\'https://cdn4.telesco.pe/p.jpg\')"></a>'
+                '<div class="tgme_widget_message_text js-message_text">hello world</div>'
+                '<time datetime="2026-11-23T15:00:00+00:00"></time></div></div>'
+                '<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message" data-post="X/2">'
+                '<div class="tgme_widget_message_text js-message_text">no photo</div><time datetime="2026-11-23T15:01:00+00:00"></time></div></div>')
+        out = sources.parse_telegram(html, '')
+        self.assertEqual([o['image_url'] for o in out], ['https://cdn4.telesco.pe/p.jpg', ''])
+
+    def test_og_and_ssrf(self):
+        html = '<head><meta property="og:image" content="/img/x.jpg?a=1&amp;b=2"></head>'
+        self.assertEqual(images.og_image(html, 'https://e.com/news/1'), 'https://e.com/img/x.jpg?a=1&b=2')
+        self.assertFalse(images._public('127.0.0.1'))
+        self.assertFalse(images._public('100.96.36.26'))
+        self.assertFalse(images._public('192.168.1.1'))
 
 
 class DigestTests(unittest.TestCase):

@@ -37,6 +37,8 @@ fi
 "$VENV/bin/pip" install -q --disable-pip-version-check -r "$APP/requirements.txt"
 "$VENV/bin/pip" install -q --disable-pip-version-check -r "$APP/requirements-webpush.txt" \
   || echo "   pywebpush 没装上：网页推送不可用，其他功能正常"
+"$VENV/bin/pip" install -q --disable-pip-version-check -r "$APP/requirements-images.txt" \
+  || echo "   Pillow 没装上：配图存原图，不缩小"
 
 echo "== 3. 离线测试"
 (cd "$APP" && "$VENV/bin/python" -m unittest discover -s tests -t . 2>&1 | tail -3)

@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import assistant, config, digest, draft, llm, memory, notify, notion, store
+from . import assistant, config, digest, draft, images, llm, memory, notify, notion, store
 from .sources import build_sources
 
 log = logging.getLogger('radar')
@@ -86,7 +86,10 @@ def item_out(r: dict, notion_links: dict = None) -> dict:
             'source_label': labels().get(r['source'], r['source']), 'tier': r['tier'], 'market': r['market'],
             'score': r['score'], 'rumor': r['rumor'], 'tickers': split(r['tickers']), 'matched': split(r['matched']),
             'published': r['published'], 'fetched': r['fetched'], 'pushed': r['pushed'], 'confirms': r['confirms'],
-            'reason': r['reason'], 'late_minutes': late, 'notion_url': (notion_links or {}).get(str(r['id']), '')}
+            'reason': r['reason'], 'late_minutes': late, 'notion_url': (notion_links or {}).get(str(r['id']), ''),
+            'image': f'/img/{r["image"]}' if r.get('image') else '', 'image_w': r.get('image_w') or 0,
+            'image_h': r.get('image_h') or 0, 'saved': r.get('saved'), 'note': r.get('save_note') or '',
+            'slim': bool(r.get('trimmed'))}
 
 
 def feed(q: dict) -> dict:
@@ -126,6 +129,33 @@ def feed(q: dict) -> dict:
     return {'items': [item_out(r, links) for r in rows], 'next_before': rows[-1]['id'] if more and rows else None}
 
 
+def saved_list(q: dict) -> dict:
+    def arg(name, default=''):
+        return (q.get(name) or [default])[0]
+    try:
+        before = float(arg('before', '0') or 0)
+        limit = max(1, min(100, int(arg('limit', '50') or 50)))
+    except ValueError:
+        raise ApiError('参数不对')
+    sql, args = 'SELECT * FROM items WHERE saved IS NOT NULL', []
+    if before:
+        sql += ' AND saved < ?'
+        args.append(before)
+    text = arg('q').strip()[:40]
+    if text:
+        like = '%' + text.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+        sql += " AND (title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR save_note LIKE ? ESCAPE '\\' OR tickers LIKE ? ESCAPE '\\')"
+        args += [like] * 4
+    sql += ' ORDER BY saved DESC LIMIT ?'
+    args.append(limit + 1)
+    with store.opened() as db:
+        rows = [dict(r) for r in db.execute(sql, args)]
+        more = len(rows) > limit
+        rows = rows[:limit]
+        links = store.saved_refs(db, 'notion', 'item', [r['id'] for r in rows])
+    return {'items': [item_out(r, links) for r in rows], 'next_before': rows[-1]['saved'] if more and rows else None}
+
+
 def item_detail(item_id: int) -> dict:
     with store.opened() as db:
         row = db.execute('SELECT * FROM items WHERE id=?', (item_id,)).fetchone()
@@ -161,6 +191,7 @@ def status(env: dict) -> dict:
         settings = store.get_settings(db)
         watch = store.watchlist(db)
         day0 = time.mktime(time.localtime(now)[:3] + (0, 0, 0, 0, 0, -1))
+        saved = {'count': db.execute('SELECT COUNT(*) FROM items WHERE saved IS NOT NULL').fetchone()[0]}
         mem = {'count': db.execute('SELECT COUNT(*) FROM memories WHERE deleted=0').fetchone()[0],
                'pending_devices': db.execute('SELECT COUNT(*) FROM devices WHERE approved=0').fetchone()[0],
                'devices': db.execute('SELECT COUNT(*) FROM devices WHERE approved=1').fetchone()[0]}
@@ -185,7 +216,7 @@ def status(env: dict) -> dict:
         'notion': {'configured': notion.configured(env), 'title': env.get('RADAR_NOTION_TITLE', '')},
         'tg': {'configured': draft.tg_configured(env), 'bot': env.get('RADAR_DRAFT_TG_BOT', ''),
                'chat_title': env.get('RADAR_DRAFT_TG_CHAT_TITLE', '')},
-        'today': today, 'memory': mem,
+        'today': today, 'memory': mem, 'saved': saved,
     }
 
 
@@ -393,6 +424,19 @@ def handle_post(path: str, body: dict) -> dict:
             raise ApiError('群 ID 不对')
         config.save_env({'RADAR_DRAFT_TG_CHAT': chat_id, 'RADAR_DRAFT_TG_CHAT_TITLE': _str(body.get('title'), 60).replace('\n', ' ')})
         return {'ok': True}
+    if path == '/api/save':
+        item_id = _int(body.get('item_id'))
+        with store.opened() as db:
+            row = db.execute('SELECT trimmed FROM items WHERE id=?', (item_id,)).fetchone()
+            if not row:
+                raise ApiError('找不到这条资讯', 404)
+            db.execute('UPDATE items SET saved=COALESCE(saved, ?), save_note=?, img_state=CASE WHEN image="" THEN 0 ELSE img_state END '
+                       'WHERE id=?', (time.time(), _str(body.get('note'), 500), item_id))
+        return {'item': item_detail(item_id)['item']}
+    if path == '/api/unsave':
+        with store.opened() as db:
+            db.execute('UPDATE items SET saved=NULL WHERE id=?', (_int(body.get('item_id')),))
+        return {'ok': True}
     if path == '/api/memories/save':
         with store.opened() as db:
             try:
@@ -449,6 +493,8 @@ def handle_get(path: str, q: dict) -> dict:
         if not d:
             raise ApiError('找不到这期日报', 404)
         return digest_out(d)
+    if path == '/api/saved':
+        return saved_list(q)
     if path == '/api/digests':
         return {'items': digest.history()}
     if path == '/api/chat':
@@ -563,6 +609,17 @@ class Handler(BaseHTTPRequestHandler):
         cache = 'no-cache' if target.suffix in ('.html', '.webmanifest') or target.name == 'sw.js' else 'max-age=300'
         self.send(200, target.read_bytes(), ctype, extra, cache)
 
+    def image(self, name: str) -> None:
+        if not self.authed():
+            return self.send(401, b'', 'text/plain')
+        if not images.NAME_RE.match(name):
+            return self.send(404, b'', 'text/plain')
+        path = images.img_dir() / name
+        if not path.is_file():
+            return self.send(404, b'', 'text/plain')
+        ctype = {'jpg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp', 'gif': 'image/gif'}[name.rsplit('.', 1)[1]]
+        self.send(200, path.read_bytes(), ctype, cache='private, max-age=604800, immutable')
+
     def do_HEAD(self):
         self.do_GET()
 
@@ -577,6 +634,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(403, '口令不对，或输错太多次（10 分钟后再试）。'.encode(), 'text/plain; charset=utf-8')
             if url.path == '/api/mem/sync':
                 return self.json(200, mem_get(self.headers, parse_qs(url.query)))
+            if url.path.startswith('/img/'):
+                return self.image(url.path[5:])
             if url.path.startswith('/api/'):
                 if not self.authed():
                     return self.json(401, {'error': '请先登录'})

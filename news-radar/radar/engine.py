@@ -14,7 +14,7 @@ import httpx
 
 from datetime import datetime
 
-from . import config, digest, llm, notify, scorer, store
+from . import config, digest, images, llm, notify, scorer, store
 from .sources import Source, build_sources, run_source
 from .text import fingerprint, match_watch, similar
 
@@ -279,11 +279,31 @@ class Engine:
             except Exception:
                 log.exception('score_loop_error')
 
+    async def image_loop(self) -> None:
+        """给重要消息和收藏找配图（见 images.py）。"""
+        while True:
+            await asyncio.sleep(15)
+            try:
+                todo = images.pending()
+                if todo:
+                    await images.process(self.client, todo)
+            except Exception:
+                log.exception('image_loop_error')
+
     async def housekeeping(self) -> None:
+        last_sweep = 0.0
         while True:
             try:
                 with store.opened() as db:
+                    trimmed = store.daily_trim(db)
                     store.prune(db)
+                if trimmed:
+                    log.info('daily_trim items=%s', trimmed)
+                if trimmed or time.time() - last_sweep > 6 * 3600:
+                    last_sweep = time.time()
+                    gone = await asyncio.to_thread(images.sweep)
+                    if gone:
+                        log.info('image_sweep files=%s', gone)
                 (config.DATA / 'heartbeat').write_text(str(int(time.time())))
             except Exception:
                 log.exception('housekeeping_error')
@@ -310,4 +330,5 @@ class Engine:
                 log.exception('digest_loop_error')
 
     async def run(self) -> None:
-        await asyncio.gather(self.fetch_loop(), self.score_loop(), self.housekeeping(), self.digest_loop())
+        await asyncio.gather(self.fetch_loop(), self.score_loop(), self.housekeeping(), self.digest_loop(),
+                             self.image_loop())

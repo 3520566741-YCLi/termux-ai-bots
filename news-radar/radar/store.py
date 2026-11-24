@@ -71,6 +71,14 @@ MIGRATIONS = {
     'confirms': 'confirms INTEGER NOT NULL DEFAULT 0',
     'event': "event TEXT NOT NULL DEFAULT ''",
     'baseline': 'baseline INTEGER NOT NULL DEFAULT 0',
+    'image_url': "image_url TEXT NOT NULL DEFAULT ''",   # 来源给的配图地址
+    'image': "image TEXT NOT NULL DEFAULT ''",           # 缓存到本机的图片文件名（data/radar/img/）
+    'img_state': 'img_state INTEGER NOT NULL DEFAULT 0', # 0 没试过 1 有图 2 没图/失败
+    'saved': 'saved REAL',                               # 收进“仓库”的时间；收藏的永不过期
+    'save_note': "save_note TEXT NOT NULL DEFAULT ''",
+    'image_w': 'image_w INTEGER NOT NULL DEFAULT 0',
+    'image_h': 'image_h INTEGER NOT NULL DEFAULT 0',
+    'trimmed': 'trimmed INTEGER NOT NULL DEFAULT 0',     # 1 = 每日清理后只剩标题、来源和原网页链接
 }
 
 DEFAULT_SETTINGS = {
@@ -123,6 +131,7 @@ def init(path: Optional[Path] = None) -> None:
             if col not in cols:
                 db.execute(f'ALTER TABLE items ADD COLUMN {ddl}')
         db.execute('CREATE INDEX IF NOT EXISTS items_event ON items(event)')
+        db.execute('CREATE INDEX IF NOT EXISTS items_saved ON items(saved) WHERE saved IS NOT NULL')
         if not db.execute('SELECT 1 FROM settings WHERE k="initialized"').fetchone():
             now = time.time()
             for name, kind, symbols, keywords in DEFAULT_WATCH:
@@ -177,8 +186,9 @@ def remove_watch(db: sqlite3.Connection, name: str) -> bool:
 # ---------- 资讯 ----------
 def insert_item(db: sqlite3.Connection, item: dict) -> Optional[int]:
     cur = db.execute(
-        'INSERT OR IGNORE INTO items(source, uid, fp, title, body, url, market, tier, published, fetched, matched, dup_of, baseline) '
-        'VALUES(:source, :uid, :fp, :title, :body, :url, :market, :tier, :published, :fetched, :matched, :dup_of, :baseline)', item)
+        'INSERT OR IGNORE INTO items(source, uid, fp, title, body, url, market, tier, published, fetched, matched, dup_of, baseline, image_url) '
+        'VALUES(:source, :uid, :fp, :title, :body, :url, :market, :tier, :published, :fetched, :matched, :dup_of, :baseline, :image_url)',
+        dict({'image_url': ''}, **item))
     return cur.lastrowid if cur.rowcount else None
 
 
@@ -223,8 +233,22 @@ def source_result(db: sqlite3.Connection, name: str, error: str = '', count: int
                    (name, time.time(), count))
 
 
-def prune(db: sqlite3.Connection, days: int = 30) -> None:
-    db.execute('DELETE FROM items WHERE fetched < ?', (time.time() - days * 86400,))
+KEEP_DAYS = 30   # 没收藏的：第二天只剩标题、来源、原网页链接（见 daily_trim），30 天后整条删掉；收藏进“仓库”的永远完整保留
+
+
+def daily_trim(db: sqlite3.Connection, now: float = None) -> int:
+    """没收藏的消息，过了当天（北京时间 0 点前抓到的）就去掉正文、摘要、图片，只留标题、来源和原网页链接，
+    以及去重/防重复推送要用的指纹、事件标识和分数。返回清理了几条。"""
+    from datetime import datetime, timedelta, timezone
+    bj = timezone(timedelta(hours=8))
+    n = datetime.fromtimestamp(now or time.time(), bj)
+    midnight = n.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    return db.execute("UPDATE items SET body='', summary='', reason='', image='', image_url='', image_w=0, image_h=0, "
+                      "img_state=2, trimmed=1 WHERE trimmed=0 AND saved IS NULL AND fetched < ?", (midnight,)).rowcount
+
+
+def prune(db: sqlite3.Connection, days: int = KEEP_DAYS) -> None:
+    db.execute('DELETE FROM items WHERE fetched < ? AND saved IS NULL', (time.time() - days * 86400,))
     db.execute('DELETE FROM chat WHERE id NOT IN (SELECT id FROM chat ORDER BY id DESC LIMIT 200)')
     db.execute('DELETE FROM digests WHERE created < ?', (time.time() - 90 * 86400,))
 

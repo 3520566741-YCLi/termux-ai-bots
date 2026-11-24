@@ -33,8 +33,15 @@
  "source": "wallstcn", "source_label": "华尔街见闻快讯", "tier": "A|B|C", "market": "stock|crypto|mixed",
  "score": 4, "rumor": 0, "tickers": ["NVDA"], "matched": ["英伟达"], "published": 1732430000.0, "fetched": 1732430010.0,
  "pushed": 1732430012.0, "confirms": 2, "reason": "推送前检查理由（可能为空）", "late_minutes": 0,
- "notion_url": "已存到 Notion 时的页面链接，否则空字符串"}
+ "notion_url": "已存到 Notion 时的页面链接，否则空字符串",
+ "image": "/img/<40位hash>.jpg 或空字符串", "image_w": 900, "image_h": 506,
+ "saved": 1732430000.0, "note": "收藏备注", "slim": false}
 ```
+- `image`：后端缓存的配图（同源，需登录 Cookie），宽最多 900；`image_w/h` 可能为 0（没装 Pillow 时），用来预留比例。
+  图是异步找的：消息刚出现时可能还没图，过十几秒刷新会有。
+- `saved`：收进“收藏”的时间，没收藏是 `null`。
+- `slim: true`：没收藏的旧消息（北京时间当天 0 点前抓到的）已被每日清理，只剩标题、来源和原网页链接（summary、image、reason 为空），
+  前端显示紧凑行，点击直接打开原网页。收藏的永远完整保留。没收藏的 30 天后整条删除。
 - `score` 可能为 `null`（还没打分）。5=极重大（红），4=重要（橙），3=值得一看，2=一般，1=噪音。
 - `tier`：A 官方、B 主流媒体、C 社交/传闻。`rumor=1` 显示“传闻”标记。`pushed` 非空表示已推送到手机。
 
@@ -74,7 +81,8 @@
  "notion": {"configured": true, "title": "资讯雷达存档"},
  "tg": {"configured": false, "bot": "", "chat_title": ""},
  "today": {"items": 3456, "pushed": 3},
- "memory": {"count": 42, "devices": 1, "pending_devices": 0}}
+ "memory": {"count": 42, "devices": 1, "pending_devices": 0},
+ "saved": {"count": 12}}
 ```
 `POST /api/settings` 可以给：`push_threshold`(1~5)、`push_unwatched_min`(1~5)、`max_push_per_hour`(1~60)、
 `mute_minutes`(0=取消静音，最多 1440)、`digest_enabled`(bool)、`digest_slots`(["HH:MM", …] 最多 6 个)、`channels`(["ntfy","webpush"] 子集)。
@@ -83,7 +91,17 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/feed?min=3&watched=1&market=stock&q=英伟达&before=123&limit=50` | 参数都可选。`min` 最低分（默认 0），`watched=1` 只看命中关注的，`pushed=1` 只看推送过的，`before` 翻页（取 id 小于它的）。返回 `{"items": [Item], "next_before": 98}`（没有更多时 `null`）。按 id 倒序 |
+| GET | `/img/<名字>` | 配图（需登录）。名字只来自 Item.image |
 | GET | `/api/item/123` | `{"item": Item, "dups": [{"title": "", "source_label": "", "url": "", "tier": "B", "published": 0}]}`（dups = 去重时合并进来的其他来源报道） |
+
+### 收藏（前端页签叫「收藏」）
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/save` | `{"item_id": 123, "note": "可选备注"}` → `{"item": Item}`（重复收藏只更新备注；没图的会马上去找图） |
+| POST | `/api/unsave` | `{"item_id": 123}` → `{"ok": true}` |
+| GET | `/api/saved?q=&before=&limit=50` | 按收藏时间倒序 `{"items": [Item], "next_before": 1732430000.0}`；`before` 传上一页的 `next_before`（收藏时间） |
+
+真正要长期留的再用 `/api/notion/save {"item_id"}` 存 Notion。`status` 里有 `"saved": {"count": 12}`。
 
 ### 日报
 | 方法 | 路径 | 说明 |
