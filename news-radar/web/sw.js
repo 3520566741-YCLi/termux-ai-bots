@@ -3,7 +3,7 @@
    - /api/*：永远走网络，不缓存（数据要新、且需要登录）
    - 网页推送：显示通知，点通知打开对应链接 */
 'use strict';
-const VERSION = 'radar-v4';
+const VERSION = 'radar-v5';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest',
   'css/base.css', 'css/feed.css', 'css/digest.css', 'css/vault.css', 'css/chat.css', 'css/settings.css', 'css/compose.css',
